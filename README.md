@@ -67,11 +67,14 @@ will require separate Home Assistant registry discovery and are not implemented 
 - Structured JSON plan generation.
 - Discriminated plan outcomes: `propose_actions`, `no_action`, and `insufficient_context`.
 - Deterministic consistency checks between the outcome and action count.
-- Post-model validation against the same resolved entity policy used before normalization.
+- Canonical `turn_on` and `turn_off` model actions for `light` and `switch` entities.
+- Deterministic per-domain capability and Home Assistant service resolution.
+- Post-model validation against the same resolved entity policy and application-owned capability
+  catalogue used before model generation.
 - Read-only planning from a command-line instruction.
 
-Service and capability authorization are not implemented. A proposed service name is still
-untrusted model output.
+Unknown domains expose no supported control actions. The model proposes only canonical action
+names; the application derives the domain and resolves the corresponding Home Assistant service.
 
 ## Safety model
 
@@ -82,15 +85,17 @@ The current design follows these principles:
 - Deny selectors override allow selectors.
 - Unknown and unapproved entities are rejected after model generation.
 - Only policy-approved, normalized state is sent to the model—not the full raw Home Assistant state.
-- The application independently derives and checks an action's domain from its entity ID.
+- The application independently derives an action's domain from its entity ID.
+- The application, rather than the model, determines whether an action is supported and resolves
+  its canonical Home Assistant service name.
 - Structured output constraints are enforced by application-side Zod validation, even when the
   same JSON Schema is supplied to Ollama.
 - Any future execution stage must revalidate policy at the final execution boundary.
 - The current application makes no Home Assistant service calls.
 
-Post-model validation currently covers entity policy and domain consistency. It is not complete
-execution authorization: service names, service data, entity capabilities, duplicate actions, and
-no-op actions do not yet have the deterministic validation required for execution.
+Post-model validation currently covers entity policy and canonical power-action capabilities for
+`light` and `switch`. It is not complete execution authorization: service data, duplicate actions,
+and no-op actions do not yet have the deterministic validation required for execution.
 
 ## Entity policy
 
@@ -128,8 +133,7 @@ Ollama returns a structured proposal similar to:
 	"actions": [
 		{
 			"entityId": "light.example",
-			"domain": "light",
-			"service": "turn_off",
+			"action": "turn_off",
 			"reason": "The explicit instruction requests this non-no-op change."
 		}
 	]
@@ -143,10 +147,12 @@ consistency rules:
 - `no_action` requires exactly zero actions.
 - `insufficient_context` requires exactly zero actions.
 - Every summary begins with `Proposed plan:`.
+- Every proposed action is exactly `turn_on` or `turn_off`; aliases such as `off` and qualified
+  services such as `light.turn_off` are rejected.
 
-The model-provided `service` and optional action data are not yet authorized against deterministic
-capability or service definitions. They remain untrusted planning data and cannot be executed by
-the current application.
+The model does not provide a domain, service name, or service data. After entity-policy checks, the
+application derives the domain from the entity ID and resolves the action through its deterministic
+capability catalogue. These validated proposals are still not executed by the current application.
 
 ## Requirements
 
@@ -257,13 +263,9 @@ Completed:
 - Policy-approved state normalization.
 - Generic state-based discovery and selector policy.
 - Read-only local LLM planning with structured outcomes.
-- Deterministic entity-policy and domain validation after model generation.
-
-Next milestone:
-
 - Deterministic capability and service modelling.
 - Canonical action and service semantics.
-- Validation and normalization of model-proposed services.
+- Deterministic entity-policy, capability, and service validation after model generation.
 
 Later:
 

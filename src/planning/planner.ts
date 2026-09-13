@@ -24,6 +24,9 @@ Follow the user's planning instruction. Do not default to an empty plan when the
 When the user explicitly states a target outcome and supplied entity states identify relevant non-no-op changes, use "propose_actions" and include those actions. Do not return only descriptive text.
 Use current state to determine whether a proposed change is relevant and to avoid no-op proposals; do not infer intent from current state alone.
 Do not normally propose control actions for entities whose state is "unavailable" or "unknown".
+Propose only an action listed in the target entity's supportedActions array and copy it exactly.
+An empty supportedActions array means that no control action may be proposed for that entity.
+The only canonical actions are "turn_on" and "turn_off". Do not use state values such as "on" or "off", domain-qualified services such as "light.turn_off", or service parameters.
 
 Do not invent missing context.
 If the requested decision depends on context that was not supplied, return an empty actions array and clearly state in the summary that there is insufficient context.
@@ -44,6 +47,7 @@ const createMessages = (request: PlanningRequest): OllamaChatMessage[] => {
 		state: state.state,
 		name: state.name,
 		area: state.area,
+		supportedActions: state.supportedActions,
 	}));
 
 	return [

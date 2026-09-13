@@ -1,43 +1,56 @@
 import {getDomainFromEntityId} from '../home-assistant/discovery.js';
+import {resolveAction, type ResolvedAction} from '../home-assistant/capabilities.js';
 import type {ResolvedEntityPolicy} from '../policy/resolver.js';
 import type {Plan, PlanOutcome, ProposedAction} from './schemas.js';
 
-export type RejectionReason = 'denied' | 'not_allowed' | 'domain_mismatch';
+export type RejectionReason = 'denied' | 'not_allowed' | 'unsupported_action';
+
+export type ValidatedAction = ProposedAction & ResolvedAction;
 
 export type RejectedAction = {
 	action: ProposedAction;
 	reason: RejectionReason;
 };
 
-export type EntityPolicyValidationResult = {
+export type PlanValidationResult = {
 	outcome: PlanOutcome;
 	summary: string;
-	actions: ProposedAction[];
+	actions: ValidatedAction[];
 	rejectedActions: RejectedAction[];
 };
 
-export const validatePlanEntityPolicy = (
-	plan: Plan,
-	policy: ResolvedEntityPolicy,
-): EntityPolicyValidationResult => {
-	const actions: ProposedAction[] = [];
+export const validatePlan = (plan: Plan, policy: ResolvedEntityPolicy): PlanValidationResult => {
+	const actions: ValidatedAction[] = [];
 	const rejectedActions: RejectedAction[] = [];
 
 	for (const action of plan.actions) {
+		const canonicalProposedAction: ProposedAction = {
+			entityId: action.entityId,
+			action: action.action,
+			reason: action.reason,
+		};
 		let reason: RejectionReason | undefined;
+		let resolvedAction: ResolvedAction | undefined;
 
 		if (policy.deniedEntityIds.has(action.entityId)) {
 			reason = 'denied';
-		} else if (!policy.allowedEntityIds.has(action.entityId)) {
+		} else if (policy.allowedEntityIds.has(action.entityId)) {
+			resolvedAction = resolveAction(getDomainFromEntityId(action.entityId), action.action);
+
+			if (resolvedAction === undefined) {
+				reason = 'unsupported_action';
+			}
+		} else {
 			reason = 'not_allowed';
-		} else if (getDomainFromEntityId(action.entityId) !== action.domain) {
-			reason = 'domain_mismatch';
 		}
 
-		if (reason === undefined) {
-			actions.push(action);
+		if (reason === undefined && resolvedAction !== undefined) {
+			actions.push({...canonicalProposedAction, ...resolvedAction});
 		} else {
-			rejectedActions.push({action, reason});
+			rejectedActions.push({
+				action: canonicalProposedAction,
+				reason: reason ?? 'unsupported_action',
+			});
 		}
 	}
 
@@ -45,7 +58,7 @@ export const validatePlanEntityPolicy = (
 		return {
 			outcome: 'no_action',
 			summary:
-				'Proposed plan: No actions are proposed because all generated actions were rejected by entity-policy validation.',
+				'Proposed plan: No actions are proposed because all generated actions were rejected by deterministic post-model validation.',
 			actions,
 			rejectedActions,
 		};

@@ -1,5 +1,6 @@
 import {describe, expect, it} from 'vitest';
 import {ZodError} from 'zod';
+import type {CanonicalAction} from '../src/home-assistant/capabilities.js';
 import {discoverEntities} from '../src/home-assistant/discovery.js';
 import {normalizeStates} from '../src/home-assistant/state-normalizer.js';
 import type {HomeAssistantState} from '../src/home-assistant/schemas.js';
@@ -29,6 +30,7 @@ describe('createPlan', () => {
 						state: 'on',
 						name: 'Example Light',
 						area: 'Example Room',
+						supportedActions: ['turn_on', 'turn_off'],
 					},
 				],
 			},
@@ -39,8 +41,7 @@ describe('createPlan', () => {
 					actions: [
 						{
 							entityId: 'light.example_light',
-							domain: 'light',
-							service: 'turn_off',
+							action: 'turn_off',
 							reason: 'The instruction asks whether it should be turned off.',
 						},
 					],
@@ -63,6 +64,7 @@ describe('createPlan', () => {
 					state: 'on',
 					name: 'Example Light',
 					area: 'Example Room',
+					supportedActions: ['turn_on', 'turn_off'],
 				},
 			],
 		});
@@ -143,8 +145,7 @@ describe('createPlan', () => {
 				actions: [
 					{
 						entityId: 'light.example_light',
-						domain: 'light',
-						service: 'turn_off',
+						action: 'turn_off',
 						reason: 'The requested change is relevant.',
 					},
 				],
@@ -158,8 +159,7 @@ describe('createPlan', () => {
 				actions: [
 					{
 						entityId: 'light.example_light',
-						domain: 'light',
-						service: 'turn_off',
+						action: 'turn_off',
 						reason: 'The requested change is relevant.',
 					},
 				],
@@ -192,7 +192,10 @@ describe('createPlan', () => {
 					properties: {
 						outcome: {const: 'propose_actions'},
 						summary: {pattern: '^Proposed plan:.*'},
-						actions: {minItems: 1},
+						actions: {
+							minItems: 1,
+							items: {properties: {action: {enum: ['turn_on', 'turn_off']}}},
+						},
 					},
 				},
 				{
@@ -242,6 +245,14 @@ describe('createPlan', () => {
 		expect(systemMessage?.content).toContain(
 			'When the user explicitly states a target outcome and supplied entity states identify relevant non-no-op changes, use "propose_actions" and include those actions. Do not return only descriptive text.',
 		);
+		expect(systemMessage?.content).toContain(
+			"Propose only an action listed in the target entity's supportedActions array and copy it exactly.",
+		);
+		expect(systemMessage?.content).toContain(
+			'The only canonical actions are "turn_on" and "turn_off".',
+		);
+		expect(systemMessage?.content).toContain('Do not use state values such as "on" or "off"');
+		expect(systemMessage?.content).toContain('domain-qualified services such as "light.turn_off"');
 	});
 
 	it('rejects a whitespace-only planning instruction without calling the model', async () => {
@@ -279,8 +290,7 @@ describe('createPlan', () => {
 				actions: [
 					{
 						entityId: 'light.example_light',
-						domain: 'light',
-						service: 'turn_off',
+						action: 'turn_off',
 						reason: 'The example light is no longer needed.',
 						unexpected: true,
 					},
@@ -303,6 +313,7 @@ describe('createPlan', () => {
 			state: 'on',
 			name: 'Example Light',
 			area: 'Example Room',
+			supportedActions: ['turn_on', 'turn_off'] as CanonicalAction[],
 			accessToken: 'must-not-be-sent',
 		};
 
@@ -331,6 +342,7 @@ describe('createPlan', () => {
 					state: 'on',
 					name: 'Example Light',
 					area: 'Example Room',
+					supportedActions: ['turn_on', 'turn_off'],
 				},
 			],
 		});
@@ -372,5 +384,83 @@ describe('createPlan', () => {
 		const userMessage = requests[0]?.messages.find((message) => message.role === 'user');
 		const content = JSON.parse(userMessage?.content ?? '') as {states: Array<{entityId: string}>};
 		expect(content.states.map((state) => state.entityId)).toEqual(['light.example_allowed']);
+	});
+
+	it('sends unknown-domain entities with no supported actions', async () => {
+		const requests: OllamaChatRequest[] = [];
+
+		await createPlan(
+			{
+				instruction: 'Assess the example sensor.',
+				states: [
+					{
+						entityId: 'sensor.example_temperature',
+						domain: 'sensor',
+						state: '21',
+						name: undefined,
+						area: undefined,
+						supportedActions: [],
+					},
+				],
+			},
+			makeTransport(
+				JSON.stringify({
+					outcome: 'no_action',
+					summary: 'Proposed plan: No supported control action is available.',
+					actions: [],
+				}),
+				requests,
+			),
+		);
+
+		const userMessage = requests[0]?.messages.find((message) => message.role === 'user');
+		const content = JSON.parse(userMessage?.content ?? '') as {
+			states: Array<{supportedActions: string[]}>;
+		};
+		expect(content.states[0]?.supportedActions).toEqual([]);
+	});
+
+	it.each(['off', 'on', 'light.turn_off', 'switch.turn_off', 'toggle'])(
+		'rejects the noncanonical action value %s',
+		async (action) => {
+			const content = JSON.stringify({
+				outcome: 'propose_actions',
+				summary: 'Proposed plan: Change the example light.',
+				actions: [
+					{
+						entityId: 'light.example_light',
+						action,
+						reason: 'The instruction requests a change.',
+					},
+				],
+			});
+
+			await expect(
+				createPlan({instruction: 'Change the example light.', states: []}, makeTransport(content)),
+			).rejects.toBeInstanceOf(ZodError);
+		},
+	);
+
+	it.each([
+		{name: 'domain', field: {domain: 'light'}},
+		{name: 'service', field: {service: 'turn_off'}},
+		{name: 'data', field: {data: {brightness: 100}}},
+	])('rejects the legacy model-controlled $name field', async ({field}) => {
+		const content = JSON.stringify({
+			outcome: 'propose_actions',
+			summary: 'Proposed plan: Turn off the example light.',
+			actions: [
+				{
+					entityId: 'light.example_light',
+					action: 'turn_off',
+					reason: 'The instruction requests a change.',
+					...field,
+				},
+			],
+		});
+
+		await expect(
+			createPlan({instruction: 'Change the example light.', states: []}, makeTransport(content)),
+		).rejects.toBeInstanceOf(ZodError);
 	});
 });

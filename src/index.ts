@@ -4,7 +4,7 @@ import {discoverEntities} from './home-assistant/discovery.js';
 import {normalizeStates} from './home-assistant/state-normalizer.js';
 import {requestOllamaChat} from './ollama/client.js';
 import {createPlan} from './planning/planner.js';
-import {validatePlanEntityPolicy} from './planning/policy.js';
+import {validatePlan} from './planning/policy.js';
 import {resolveEntityPolicy, selectAllowedEntities} from './policy/resolver.js';
 
 const main = async (instruction: string): Promise<void> => {
@@ -17,7 +17,7 @@ const main = async (instruction: string): Promise<void> => {
 	const allowedEntities = selectAllowedEntities(discoveredEntities, resolvedPolicy);
 	const normalizedStates = normalizeStates(allowedEntities);
 	const plan = await createPlan({instruction, states: normalizedStates}, requestOllamaChat);
-	const validatedPlan = validatePlanEntityPolicy(plan, resolvedPolicy);
+	const validatedPlan = validatePlan(plan, resolvedPolicy);
 
 	console.log('Connected to Home Assistant.');
 	console.log(`Received ${states.length} entities.`);
@@ -27,7 +27,7 @@ const main = async (instruction: string): Promise<void> => {
 	console.log(`Model plan outcome: ${validatedPlan.outcome}.`);
 	console.log('Model plan summary (untrusted descriptive text):');
 	console.log(validatedPlan.summary);
-	console.log('Entity-policy-validated proposals:');
+	console.log('Deterministically validated proposals:');
 	console.log(JSON.stringify(validatedPlan.actions, undefined, 2));
 	console.log(`Rejected ${validatedPlan.rejectedActions.length} proposed actions.`);
 	console.log('No Home Assistant service calls were made.');

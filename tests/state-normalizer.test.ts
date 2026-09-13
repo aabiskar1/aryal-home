@@ -30,7 +30,14 @@ describe('state normalization', () => {
 			state: 'on',
 			name: 'Example Kitchen Light',
 			area: undefined,
+			supportedActions: ['turn_on', 'turn_off'],
 		});
+	});
+
+	it('exposes no supported actions for an unknown domain', () => {
+		const [entity] = discoverEntities([makeState('sensor.example_temperature', '21')]);
+
+		expect(normalizeState(entity!).supportedActions).toEqual([]);
 	});
 
 	it('normalizes a collection of discovered entities', () => {

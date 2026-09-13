@@ -1,10 +1,9 @@
 import {z} from 'zod';
+import {canonicalActions} from '../home-assistant/capabilities.js';
 
 export const proposedActionSchema = z.strictObject({
 	entityId: z.string().trim().min(1),
-	domain: z.string().trim().min(1),
-	service: z.string().trim().min(1),
-	data: z.record(z.string(), z.unknown()).optional(),
+	action: z.enum(canonicalActions),
 	reason: z.string().trim().min(1).max(500),
 });
 

@@ -1,4 +1,5 @@
 import type {DiscoveredEntity} from './discovery.js';
+import {getSupportedActions, type CanonicalAction} from './capabilities.js';
 
 export type NormalizedEntityState = {
 	entityId: string;
@@ -6,6 +7,7 @@ export type NormalizedEntityState = {
 	state: string;
 	name: string | undefined;
 	area: string | undefined;
+	supportedActions: CanonicalAction[];
 };
 
 const getStringAttribute = (
@@ -26,6 +28,7 @@ export const normalizeState = (entity: DiscoveredEntity): NormalizedEntityState 
 		state: homeAssistantState.state,
 		name: getStringAttribute(homeAssistantState.attributes, 'friendly_name'),
 		area: getStringAttribute(homeAssistantState.attributes, 'area_name'),
+		supportedActions: getSupportedActions(entity.domain),
 	};
 };
 

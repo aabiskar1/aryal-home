@@ -1,7 +1,7 @@
 {
-	"name": "home-assistant-ai-orchestrator",
+	"name": "aryal-home",
 	"version": "0.1.0",
-	"description": "Local-first orchestration layer connecting Home Assistant with local LLMs.",
+	"description": "Privacy-first local AI orchestration for intelligent home automation.",
 	"type": "module",
 	"main": "dist/index.js",
 	"scripts": {

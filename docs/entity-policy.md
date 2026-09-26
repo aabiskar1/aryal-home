@@ -1,6 +1,6 @@
 # Entity policy
 
-The orchestrator discovers currently existing entities from Home Assistant state data and then
+ARYAL discovers currently existing entities from Home Assistant state data and then
 resolves a local, default-deny policy against that discovery snapshot. Discovery never grants
 permission by itself.
 

@@ -82,30 +82,52 @@ const hasPhrase = (instruction: string, phrase: string): boolean => {
 const hasAnyPhrase = (instruction: string, phrases: readonly string[]): boolean =>
 	phrases.some((phrase) => hasPhrase(instruction, phrase));
 
-const matchedAreaLength = (instruction: string, candidate: RelevanceCandidate): number => {
-	let longest = 0;
+type AreaMatch = {
+	candidate: RelevanceCandidate;
+	start: number;
+	end: number;
+};
+
+const matchedAreas = (instruction: string, candidate: RelevanceCandidate): AreaMatch[] => {
+	const matches: AreaMatch[] = [];
 	for (const name of [candidate.state.area, ...candidate.areaAliases]) {
-		if (name !== undefined && hasPhrase(instruction, name)) {
-			longest = Math.max(longest, normalize(name).length);
+		if (name === undefined) {
+			continue;
+		}
+
+		const phrase = normalize(name);
+		if (phrase.length === 0) {
+			continue;
+		}
+
+		const boundedPhrase = ` ${phrase} `;
+		let start = instruction.indexOf(boundedPhrase);
+		while (start !== -1) {
+			matches.push({candidate, start: start + 1, end: start + 1 + phrase.length});
+			start = instruction.indexOf(boundedPhrase, start + 1);
 		}
 	}
 
-	return longest;
+	return matches;
 };
 
 const areaCandidates = (
 	instruction: string,
 	candidates: RelevanceCandidate[],
 ): RelevanceCandidate[] => {
-	const matches = candidates.map((candidate) => ({
-		candidate,
-		length: matchedAreaLength(instruction, candidate),
-	}));
-	const longest = Math.max(0, ...matches.map((match) => match.length));
+	const matches = candidates.flatMap((candidate) => matchedAreas(` ${instruction} `, candidate));
+	const unshadowed = matches.filter((match) =>
+		matches.every(
+			(other) =>
+				other.end - other.start <= match.end - match.start ||
+				other.start >= match.end ||
+				match.start >= other.end,
+		),
+	);
 
-	return longest === 0
-		? []
-		: matches.filter((match) => match.length === longest).map((match) => match.candidate);
+	return candidates.filter((candidate) =>
+		unshadowed.some((match) => match.candidate === candidate),
+	);
 };
 
 const observationProfile = (

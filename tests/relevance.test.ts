@@ -83,6 +83,62 @@ describe('selectRelevantContext', () => {
 		]);
 	});
 
+	it('preserves two distinctly named areas in one instruction', () => {
+		expect(selectedIds('Turn off kitchen and bedroom lights')).toEqual([
+			'light.example_kitchen_ceiling',
+			'light.example_kitchen_counter',
+			'light.example_bedroom_lamp',
+			'light.example_bedroom_ceiling',
+		]);
+		expect(selectedIds('Turn off kitchen, bedroom lights')).toEqual([
+			'light.example_kitchen_ceiling',
+			'light.example_kitchen_counter',
+			'light.example_bedroom_lamp',
+			'light.example_bedroom_ceiling',
+		]);
+	});
+
+	it('prefers longer overlapping area names and aliases without dropping separate mentions', () => {
+		const overlapping = [
+			candidate('light.example_room', 'Ceiling Light', 'Room'),
+			candidate('light.example_living', 'Ceiling Light', 'Living Room'),
+			candidate('light.example_den', 'Ceiling Light', 'Den', {
+				areaAliases: ['Living Room'],
+			}),
+			candidate('light.example_bedroom', 'Ceiling Light', 'Bedroom'),
+		];
+
+		expect(selectedIds('Turn off living room lights', overlapping)).toEqual([
+			'light.example_living',
+			'light.example_den',
+		]);
+		expect(selectedIds('Turn off living room and bedroom lights', overlapping)).toEqual([
+			'light.example_living',
+			'light.example_den',
+			'light.example_bedroom',
+		]);
+		expect(selectedIds('Turn off room and living room lights', overlapping)).toEqual([
+			'light.example_room',
+			'light.example_living',
+			'light.example_den',
+		]);
+	});
+
+	it('intersects every mentioned area with the requested domain', () => {
+		const mixed = [
+			...candidates,
+			candidate('switch.example_kitchen_plug', 'Counter Plug', 'Kitchen'),
+			candidate('switch.example_bedroom_plug', 'Bedside Plug', 'Bedroom'),
+		];
+
+		expect(selectedIds('Turn off kitchen and bedroom lights', mixed)).toEqual([
+			'light.example_kitchen_ceiling',
+			'light.example_kitchen_counter',
+			'light.example_bedroom_lamp',
+			'light.example_bedroom_ceiling',
+		]);
+	});
+
 	it('includes all room lights even if one entity is literally named Kitchen Lights', () => {
 		const withGroup = [
 			...candidates,

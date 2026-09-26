@@ -3,11 +3,10 @@ import {env} from './config/env.js';
 import {getHomeAssistantStates} from './home-assistant/client.js';
 import {discoverEntities} from './home-assistant/discovery.js';
 import {getHomeAssistantRegistries} from './home-assistant/registry-client.js';
-import {normalizeStates} from './home-assistant/state-normalizer.js';
 import {requestOllamaChat} from './ollama/client.js';
-import {createPlan} from './planning/planner.js';
-import {validatePlan} from './planning/policy.js';
-import {resolveEntityPolicy, selectAllowedEntities} from './policy/resolver.js';
+import {runPlanningPipeline} from './planning/pipeline.js';
+import {selectionDiagnostic} from './planning/relevance.js';
+import {resolveEntityPolicy} from './policy/resolver.js';
 
 const main = async (instruction: string): Promise<void> => {
 	const [states, configuredPolicy, registries] = await Promise.all([
@@ -17,18 +16,24 @@ const main = async (instruction: string): Promise<void> => {
 	]);
 	const discoveredEntities = discoverEntities(states, registries);
 	const resolvedPolicy = resolveEntityPolicy(discoveredEntities, configuredPolicy);
-	const allowedEntities = selectAllowedEntities(discoveredEntities, resolvedPolicy);
-	const normalizedStates = normalizeStates(allowedEntities);
-	const plan = await createPlan({instruction, states: normalizedStates}, requestOllamaChat);
-	const validatedPlan = validatePlan(plan, resolvedPolicy);
+	const result = await runPlanningPipeline(instruction, discoveredEntities, resolvedPolicy, {
+		model: env.OLLAMA_MODEL,
+		maxRequestBytes: env.PLANNING_REQUEST_MAX_BYTES,
+		chat: requestOllamaChat,
+	});
+	const {validatedPlan, selection} = result;
 
 	console.log('Connected to Home Assistant.');
 	console.log(`Received ${states.length} entities.`);
 	console.log(`Discovered ${discoveredEntities.length} entities.`);
-	console.log(`Resolved ${resolvedPolicy.allowedEntityIds.size} allowed entities.`);
-	console.log(`Normalized ${normalizedStates.length} entities.`);
-	console.log(`Model plan outcome: ${validatedPlan.outcome}.`);
-	console.log('Model plan summary (untrusted descriptive text):');
+	console.log(`Resolved ${result.permittedCount} allowed entities.`);
+	console.log('Selection diagnostics:', selectionDiagnostic(selection, result.permittedCount));
+	console.log(`Validated plan outcome: ${validatedPlan.outcome}.`);
+	console.log(
+		selection.kind === 'ready'
+			? 'Model plan summary (untrusted descriptive text):'
+			: 'Deterministic planning summary:',
+	);
 	console.log(validatedPlan.summary);
 	console.log('Deterministically validated proposals:');
 	console.log(JSON.stringify(validatedPlan.actions, undefined, 2));

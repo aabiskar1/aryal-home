@@ -30,6 +30,8 @@ describe('state normalization', () => {
 			state: 'on',
 			name: 'Example Kitchen Light',
 			area: undefined,
+			deviceClass: undefined,
+			unit: undefined,
 			supportedActions: ['turn_on', 'turn_off'],
 		});
 	});
@@ -56,5 +58,42 @@ describe('state normalization', () => {
 			'light.example_kitchen_light',
 			'light.example_hallway',
 		]);
+	});
+
+	it('uses the validated effective area name and narrow observation attributes', () => {
+		const [entity] = discoverEntities(
+			[
+				makeState('sensor.example_temperature', '21', {
+					friendly_name: 'Room Reading',
+					area_name: 'Stale Room',
+					device_class: 'temperature',
+					unit_of_measurement: '°C',
+				}),
+			],
+			{
+				status: 'available',
+				entities: [
+					{
+						entity_id: 'sensor.example_temperature',
+						device_id: null,
+						area_id: 'example_area',
+						labels: [],
+						disabled_by: null,
+					},
+				],
+				devices: [],
+				areas: [
+					{area_id: 'example_area', name: 'Example Room', aliases: ['Example Alias'], labels: []},
+				],
+				labels: [],
+			},
+		);
+
+		expect(normalizeState(entity!)).toMatchObject({
+			area: 'Example Room',
+			deviceClass: 'temperature',
+			unit: '°C',
+			supportedActions: [],
+		});
 	});
 });

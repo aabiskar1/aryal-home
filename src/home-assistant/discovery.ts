@@ -12,6 +12,8 @@ export type RegistryMetadata =
 			status: 'available';
 			deviceId: string | undefined;
 			areaId: string | undefined;
+			areaName: string | undefined;
+			areaAliases: string[];
 			labels: {entity: string[]; device: string[]; area: string[]};
 			disabled: boolean;
 	  };
@@ -85,6 +87,8 @@ const resolveMetadata = (entityId: string, lookup: RegistryLookup): RegistryMeta
 		status: 'available',
 		deviceId: entry?.device_id ?? undefined,
 		areaId: areaId ?? undefined,
+		areaName: area?.name,
+		areaAliases: area?.aliases ?? [],
 		labels,
 		disabled: [entry?.disabled_by, device?.disabled_by, parent?.disabled_by].some(
 			(value) => typeof value === 'string',

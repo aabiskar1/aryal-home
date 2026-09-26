@@ -1,5 +1,7 @@
+import {Buffer} from 'node:buffer';
 import type {NormalizedEntityState} from '../home-assistant/state-normalizer.js';
-import type {OllamaChatMessage, OllamaChatTransport} from '../ollama/client.js';
+import type {OllamaChatMessage, OllamaChatRequest, OllamaChatTransport} from '../ollama/client.js';
+import {createOllamaChatPayload} from '../ollama/request.js';
 import {planJsonSchema, planSchema, type Plan} from './schemas.js';
 
 export type PlanningRequest = {
@@ -47,6 +49,8 @@ const createMessages = (request: PlanningRequest): OllamaChatMessage[] => {
 		state: state.state,
 		name: state.name,
 		area: state.area,
+		deviceClass: state.deviceClass,
+		unit: state.unit,
 		supportedActions: state.supportedActions,
 	}));
 
@@ -59,14 +63,23 @@ const createMessages = (request: PlanningRequest): OllamaChatMessage[] => {
 	];
 };
 
+export const createPlanningChatRequest = (request: PlanningRequest): OllamaChatRequest => ({
+	messages: createMessages(request),
+	format: planJsonSchema,
+});
+
+export const planningRequestBytes = (request: PlanningRequest, model: string): number => {
+	const chatRequest = createPlanningChatRequest(request);
+	const payload = createOllamaChatPayload(chatRequest, model);
+
+	return Buffer.byteLength(JSON.stringify(payload));
+};
+
 export const createPlan = async (
 	request: PlanningRequest,
 	chat: OllamaChatTransport,
 ): Promise<Plan> => {
-	const content = await chat({
-		messages: createMessages(request),
-		format: planJsonSchema,
-	});
+	const content = await chat(createPlanningChatRequest(request));
 	const parsed: unknown = JSON.parse(content);
 
 	return planSchema.parse(parsed);

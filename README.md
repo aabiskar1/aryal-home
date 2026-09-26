@@ -47,10 +47,12 @@ flowchart TD
     P[Local selector policy] --> R[Resolve allowed and denied entities]
     D --> R
     R --> N[Normalize approved state]
-    N --> O[Local Ollama model]
-    I[Planning instruction] --> O
+    N --> Q[Select relevant permitted context]
+    I[Planning instruction] --> Q
+    Q --> O[Local Ollama model]
+    I --> O
     O --> S[Validate structured plan with Zod]
-    S --> PV[Revalidate entities against resolved policy]
+    S --> PV[Validate full policy, selected context and capabilities]
     PV --> C[Read-only CLI output]
     PV -. not implemented .-> E[Home Assistant service execution]
 
@@ -63,7 +65,9 @@ actions for. Finding an entity in Home Assistant never grants permission by itse
 
 Current state comes from REST `/api/states`. A short-lived, read-only Home Assistant WebSocket
 connection retrieves entity, device, area, and label registries for internal policy resolution.
-Registry-only entries never become controllable entities. Registry metadata is not sent to Ollama.
+Registry-only entries never become controllable entities. Opaque registry IDs and raw registry
+payloads are not sent to Ollama; a validated effective-area display name may be included for a
+selected entity. Relevance selection runs only after policy resolution and never grants permission.
 
 ## Implemented capabilities
 
@@ -76,14 +80,17 @@ Registry-only entries never become controllable entities. Registry metadata is n
 - Version 1 `entityId`/`domain` selectors and version 2 `deviceId`/`areaId`/`labelId` selectors.
 - Default-deny and deny-overrides-allow policy behavior.
 - State normalization before model exposure.
+- Deterministic relevance selection of permitted entities by exact names, effective areas and
+  aliases, domains, and a small observation vocabulary. Ambiguous instructions retain complete
+  permitted context when it fits the configured budget.
 - Local Ollama `/api/chat` integration with a configurable model.
 - Structured JSON plan generation.
 - Discriminated plan outcomes: `propose_actions`, `no_action`, and `insufficient_context`.
 - Deterministic consistency checks between the outcome and action count.
 - Canonical `turn_on` and `turn_off` model actions for `light` and `switch` entities.
 - Deterministic per-domain capability and Home Assistant service resolution.
-- Post-model validation against the same resolved entity policy and application-owned capability
-  catalogue used before model generation.
+- Post-model validation against the full resolved policy, the exact selected model context, and
+  the application-owned capability catalogue.
 - Read-only planning from a command-line instruction.
 
 The local model's proposed plan is experimental and may be incomplete or incorrect. The
@@ -102,6 +109,8 @@ The current design follows these principles:
 - Deny selectors override allow selectors.
 - Unknown and unapproved entities are rejected after model generation.
 - Only policy-approved, normalized state is sent to the model—not the full raw Home Assistant state.
+- A proposed action for a policy-allowed entity is rejected if that entity was not in the exact
+  context sent to Ollama.
 - The application independently derives an action's domain from its entity ID.
 - The application, rather than the model, determines whether an action is supported and resolves
   its canonical Home Assistant service name.
@@ -113,6 +122,28 @@ The current design follows these principles:
 Post-model validation currently covers entity policy and canonical power-action capabilities for
 `light` and `switch`. It is not complete execution authorization: service data, duplicate actions,
 and no-op actions do not yet have the deterministic validation required for execution.
+
+## Relevance selection and context budget
+
+Selection is deterministic and uses no extra model call or external service. It matches explicit
+entity IDs and friendly names, validated effective-area names and aliases, and a small set of
+domain terms. For example, “Turn on kitchen lights” selects permitted kitchen lights; “Turn off
+all lights” selects every permitted light; and “Turn on bedroom lamp” can select a named lamp.
+Presence, temperature, and weather questions select relevant permitted read-only observations.
+Motion alone is not treated as proof that somebody is home.
+
+An instruction without a clear target, such as “I'm going to bed,” conservatively includes all
+permitted entities. A clearly targeted request with no permitted match returns
+`insufficient_context` without calling Ollama. Selection never silently truncates a broad set.
+The planning budget measures the complete serialized Ollama request (including prompt, instruction,
+schema, and selected entities) plus 4,096 bytes of output headroom. If the required complete
+selection exceeds `PLANNING_REQUEST_MAX_BYTES`, ARYAL returns `insufficient_context` and does not
+call Ollama. This byte limit is a conservative application guard, not an exact model token count;
+adjust it for the locally deployed model and available memory.
+
+Opaque device and label IDs, registry payloads, and unselected entities are not sent to Ollama.
+Area display names and narrowly validated observation classes or units may be included for
+selected entities. AI-assisted relevance selection is a separate future milestone.
 
 ## Entity policy
 
@@ -193,16 +224,7 @@ Mise is optional; any suitable Node.js 24 installation works.
 
 ## Installation
 
-Until the GitHub repository is renamed, clone the current repository into a local directory named
-`aryal-home`:
-
-```sh
-git clone https://github.com/aabiskar1/home-assistant-ai-orchestrator.git aryal-home
-cd aryal-home
-npm install
-```
-
-After the repository is renamed to `aryal-home`, use its new URL:
+Clone the repository:
 
 ```sh
 git clone https://github.com/aabiskar1/aryal-home.git
@@ -226,10 +248,12 @@ HA_TOKEN=replace-with-your-home-assistant-token
 
 OLLAMA_URL=http://localhost:11434
 OLLAMA_MODEL=gemma4:e2b
+PLANNING_REQUEST_MAX_BYTES=24576
 ```
 
-Set `HA_URL`, `HA_TOKEN`, `OLLAMA_URL`, and `OLLAMA_MODEL` for your environment. The current
-implementation has no service-execution path.
+Set `HA_URL`, `HA_TOKEN`, `OLLAMA_URL`, and `OLLAMA_MODEL` for your environment. Adjust
+`PLANNING_REQUEST_MAX_BYTES` if the complete selected request exceeds your local model budget.
+The current implementation has no service-execution path.
 
 Create the local entity policy:
 
@@ -257,8 +281,9 @@ node --env-file=.env dist/index.js \
   "Review the allowed lights and propose whether any should be turned off."
 ```
 
-The CLI reports the number of received, discovered, allowed, and normalized entities; the
-validated plan outcome and summary; accepted and rejected proposals; and this final confirmation:
+The CLI reports the number of received, discovered, and allowed entities; aggregate selection
+diagnostics; the validated plan outcome and summary; accepted and rejected proposals; and this
+final confirmation:
 
 ```text
 No Home Assistant service calls were made.
@@ -288,16 +313,17 @@ Useful individual scripts include `npm run test:watch`, `npm run format:check`, 
 Implemented:
 
 - Home Assistant state retrieval and external-data validation.
-- Policy-approved state normalization.
+- Policy-approved state normalization and deterministic relevance selection.
 - Registry-enriched state discovery and versioned selector policy.
 - Read-only local LLM planning with structured outcomes.
 - Deterministic capability and service modelling.
 - Canonical action and service semantics.
-- Deterministic entity-policy, capability, and service validation after model generation.
+- Deterministic entity-policy, selected-context, capability, and service validation after model
+  generation.
 
 Planned:
 
-- Relevant-state selection and compact context ranking.
+- AI-assisted relevance selection, if needed after deterministic selection is evaluated.
 - Richer capability-aware normalization.
 - Deterministic action and service-data validation.
 - Controlled Home Assistant execution with confirmation.
@@ -305,20 +331,6 @@ Planned:
 
 Execution will not be added until the deterministic authorization and validation boundaries are in
 place.
-
-## GitHub repository rename
-
-This documentation anticipates the separate rename of the GitHub repository to `aabiskar1/aryal-home`
-after this rebrand is merged. The rename does not change local configuration or environment variable
-names. After the rename, existing clones can update their remote with:
-
-```sh
-git remote set-url origin https://github.com/aabiskar1/aryal-home.git
-```
-
-Review any external links, automation, or integrations that use the old repository URL. This
-repository has no Docker Compose files, GitHub Actions workflows, container image references, or
-release configuration to migrate.
 
 ## Privacy
 

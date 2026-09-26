@@ -23,6 +23,7 @@ describe('validatePlan', () => {
 				allowedEntityIds: new Set([entityId]),
 				deniedEntityIds: new Set(),
 			},
+			new Set([entityId]),
 		);
 
 		expect(result.outcome).toBe('propose_actions');
@@ -42,6 +43,7 @@ describe('validatePlan', () => {
 				allowedEntityIds: new Set(['light.example_allowed']),
 				deniedEntityIds: new Set(),
 			},
+			new Set(['light.example_allowed']),
 		);
 
 		expect(result.outcome).toBe('no_action');
@@ -63,6 +65,7 @@ describe('validatePlan', () => {
 				allowedEntityIds: new Set([entityId]),
 				deniedEntityIds: new Set([entityId]),
 			},
+			new Set([entityId]),
 		);
 
 		expect(result.actions).toEqual([]);
@@ -81,6 +84,7 @@ describe('validatePlan', () => {
 				allowedEntityIds: new Set(),
 				deniedEntityIds: new Set(),
 			},
+			new Set(),
 		);
 
 		expect(result.rejectedActions).toEqual([{action, reason: 'not_allowed'}]);
@@ -98,6 +102,7 @@ describe('validatePlan', () => {
 				allowedEntityIds: new Set([action.entityId]),
 				deniedEntityIds: new Set(),
 			},
+			new Set([action.entityId]),
 		);
 
 		expect(result.outcome).toBe('no_action');
@@ -118,6 +123,7 @@ describe('validatePlan', () => {
 				allowedEntityIds: new Set([accepted.entityId, rejected.entityId]),
 				deniedEntityIds: new Set(),
 			},
+			new Set([accepted.entityId, rejected.entityId]),
 		);
 
 		expect(result.outcome).toBe('propose_actions');
@@ -143,6 +149,7 @@ describe('validatePlan', () => {
 				allowedEntityIds: new Set([proposedAction.entityId]),
 				deniedEntityIds: new Set(),
 			},
+			new Set([proposedAction.entityId]),
 		);
 
 		expect(result.actions).toEqual([{...proposedAction, domain: 'light', service: 'turn_off'}]);

@@ -206,4 +206,25 @@ describe('Home Assistant registry client', () => {
 
 		expect(result.status).toBe('available');
 	});
+
+	it('rejects area entries without a validated display name', async () => {
+		const {result} = await run((message, socket) => {
+			if (message.type === 'auth') {
+				socket.emit({type: 'auth_ok'});
+				return;
+			}
+
+			socket.emit({
+				type: 'result',
+				id: message.id,
+				success: true,
+				result:
+					message.type === 'config/area_registry/list'
+						? [{area_id: 'example_area', labels: []}]
+						: validResults[String(message.type)],
+			});
+		});
+
+		expect(result).toEqual({status: 'unavailable'});
+	});
 });

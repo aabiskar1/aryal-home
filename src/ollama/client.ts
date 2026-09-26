@@ -1,6 +1,7 @@
 import got from 'got';
 import {env} from '../config/env.js';
 import {ollamaChatResponseSchema} from './schemas.js';
+import {createOllamaChatPayload} from './request.js';
 
 export type OllamaChatMessage = {
 	role: 'system' | 'user' | 'assistant';
@@ -26,16 +27,7 @@ const ollamaClient = got.extend({
 
 export const requestOllamaChat: OllamaChatTransport = async (request) => {
 	const data: unknown = await ollamaClient
-		.post('chat', {
-			json: {
-				model: env.OLLAMA_MODEL,
-				messages: request.messages,
-				stream: false,
-				think: false,
-				keep_alive: '3m',
-				...(request.format && {format: request.format}),
-			},
-		})
+		.post('chat', {json: createOllamaChatPayload(request, env.OLLAMA_MODEL)})
 		.json();
 
 	return ollamaChatResponseSchema.parse(data).message.content;

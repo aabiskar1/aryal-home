@@ -1,18 +1,26 @@
 <p align="center">
-  <img src="assets/banner.png" alt="Home Assistant AI Orchestrator" />
+  <img src="assets/banner.png" alt="ARYAL — Adaptive Reasoning for Your Automated Living" />
 </p>
 
-# Home Assistant AI Orchestrator
+# ARYAL
 
-Home Assistant AI Orchestrator is a local-first, safety-oriented orchestration layer that lets a
-local LLM reason about Home Assistant state without giving the model direct control of your home.
+**Adaptive Reasoning for Your Automated Living**
+
+_Your home. Your intelligence. Your control._
+
+ARYAL is a privacy-first, local AI orchestration framework that connects contextual intelligence
+with safe, deterministic smart home automation.
+
+It integrates with Home Assistant and locally hosted language models to interpret natural language,
+reason about contextual information, and propose actions within explicitly defined security
+boundaries.
 
 Home Assistant remains the source of truth. The model receives only explicitly permitted,
 normalized state and produces structured proposed actions that are schema-validated and checked
 against deterministic entity policy.
 
-> **Status:** Early development. The current implementation is read-only and cannot execute Home
-> Assistant service calls.
+> **Status:** Early development. Read-only AI planning is experimental. The current implementation
+> cannot execute Home Assistant service calls.
 
 ## Why this project exists
 
@@ -25,7 +33,7 @@ should remain separate:
 - **Execution:** making an approved Home Assistant service call and confirming its result.
 
 An LLM is useful for interpreting intent and proposing a plan, but natural-language output is not
-authorization. This project keeps policy and validation in deterministic application code. The
+authorization. ARYAL keeps policy and validation in deterministic application code. The
 execution stage is intentionally absent while those boundaries are developed and tested.
 
 ## Architecture
@@ -54,7 +62,7 @@ actions for. Finding an entity in Home Assistant never grants permission by itse
 The current discovery source is `/api/states`. Authoritative device, area, and label relationships
 will require separate Home Assistant registry discovery and are not implemented yet.
 
-## Current capabilities
+## Implemented capabilities
 
 - Home Assistant REST state retrieval.
 - Zod validation at external and model-output boundaries.
@@ -72,6 +80,10 @@ will require separate Home Assistant registry discovery and are not implemented 
 - Post-model validation against the same resolved entity policy and application-owned capability
   catalogue used before model generation.
 - Read-only planning from a command-line instruction.
+
+The local model's proposed plan is experimental and may be incomplete or incorrect. The
+application validates its structure, entity policy, and supported actions before displaying it.
+Execution and final execution-boundary validation are planned, not implemented.
 
 Unknown domains expose no supported control actions. The model proposes only canonical action
 names; the application derives the domain and resolves the corresponding Home Assistant service.
@@ -176,9 +188,20 @@ Mise is optional; any suitable Node.js 24 installation works.
 
 ## Installation
 
+Until the GitHub repository is renamed, clone the current repository into a local directory named
+`aryal-home`:
+
 ```sh
-git clone https://github.com/aabiskar1/home-assistant-ai-orchestrator.git
-cd home-assistant-ai-orchestrator
+git clone https://github.com/aabiskar1/home-assistant-ai-orchestrator.git aryal-home
+cd aryal-home
+npm install
+```
+
+After the repository is renamed to `aryal-home`, use its new URL:
+
+```sh
+git clone https://github.com/aabiskar1/aryal-home.git
+cd aryal-home
 npm install
 ```
 
@@ -257,7 +280,7 @@ Useful individual scripts include `npm run test:watch`, `npm run format:check`, 
 
 ## Roadmap
 
-Completed:
+Implemented:
 
 - Home Assistant state retrieval and external-data validation.
 - Policy-approved state normalization.
@@ -267,7 +290,7 @@ Completed:
 - Canonical action and service semantics.
 - Deterministic entity-policy, capability, and service validation after model generation.
 
-Later:
+Planned:
 
 - Home Assistant registry-backed discovery for devices, areas, and labels.
 - `areaId`, `deviceId`, and `labelId` policy selectors.
@@ -278,6 +301,20 @@ Later:
 
 Execution will not be added until the deterministic authorization and validation boundaries are in
 place.
+
+## GitHub repository rename
+
+This documentation anticipates the separate rename of the GitHub repository to `aabiskar1/aryal-home`
+after this rebrand is merged. The rename does not change local configuration or environment variable
+names. After the rename, existing clones can update their remote with:
+
+```sh
+git remote set-url origin https://github.com/aabiskar1/aryal-home.git
+```
+
+Review any external links, automation, or integrations that use the old repository URL. This
+repository has no Docker Compose files, GitHub Actions workflows, container image references, or
+release configuration to migrate.
 
 ## Privacy
 

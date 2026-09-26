@@ -40,6 +40,12 @@ describe('state normalization', () => {
 		expect(normalizeState(entity!).supportedActions).toEqual([]);
 	});
 
+	it.each(['unavailable', 'unknown'])('exposes no supported actions for a %s light', (value) => {
+		const [entity] = discoverEntities([makeState('light.example_light', value)]);
+
+		expect(normalizeState(entity!).supportedActions).toEqual([]);
+	});
+
 	it('normalizes a collection of discovered entities', () => {
 		const entities = discoverEntities([
 			makeState('light.example_kitchen_light', 'on'),

@@ -19,11 +19,13 @@ describe('discoverEntities', () => {
 				entityId: 'light.example_light',
 				domain: 'light',
 				homeAssistantState: states[0],
+				metadata: {status: 'unavailable', reason: 'registry_failure'},
 			},
 			{
 				entityId: 'switch.example_switch',
 				domain: 'switch',
 				homeAssistantState: states[1],
+				metadata: {status: 'unavailable', reason: 'registry_failure'},
 			},
 		]);
 	});

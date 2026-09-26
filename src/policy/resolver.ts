@@ -6,9 +6,36 @@ export type ResolvedEntityPolicy = {
 	deniedEntityIds: ReadonlySet<string>;
 };
 
-const isSelectorMatch = (entity: DiscoveredEntity, selector: EntitySelector): boolean =>
-	(selector.entityId === undefined || selector.entityId === entity.entityId) &&
-	(selector.domain === undefined || selector.domain === entity.domain);
+type Match = 'match' | 'no_match' | 'unknown';
+
+const selectorMatch = (entity: DiscoveredEntity, selector: EntitySelector): Match => {
+	const {entityId, domain, deviceId, areaId, labelId} = selector;
+	if (
+		(entityId !== undefined && entityId !== entity.entityId) ||
+		(domain !== undefined && domain !== entity.domain)
+	) {
+		return 'no_match';
+	}
+
+	if (deviceId === undefined && areaId === undefined && labelId === undefined) {
+		return 'match';
+	}
+
+	if (entity.metadata.status === 'unavailable') {
+		return 'unknown';
+	}
+
+	if (
+		(deviceId !== undefined && deviceId !== entity.metadata.deviceId) ||
+		(areaId !== undefined && areaId !== entity.metadata.areaId) ||
+		(labelId !== undefined &&
+			Object.values(entity.metadata.labels).every((labels) => !labels.includes(labelId)))
+	) {
+		return 'no_match';
+	}
+
+	return 'match';
+};
 
 export const resolveEntityPolicy = (
 	entities: DiscoveredEntity[],
@@ -18,14 +45,19 @@ export const resolveEntityPolicy = (
 	const deniedEntityIds = new Set<string>();
 
 	for (const entity of entities) {
-		const isAllowed = policy.allow.some((selector) => isSelectorMatch(entity, selector));
-		const isDenied = policy.deny.some((selector) => isSelectorMatch(entity, selector));
+		const isAllowed = policy.allow.some((selector) => selectorMatch(entity, selector) === 'match');
+		const isDenied = policy.deny.some((selector) => selectorMatch(entity, selector) !== 'no_match');
+		const isIneligible =
+			entity.homeAssistantState.state === 'unavailable' ||
+			entity.homeAssistantState.state === 'unknown' ||
+			(entity.metadata.status === 'unavailable' && entity.metadata.reason === 'incomplete') ||
+			(entity.metadata.status === 'available' && entity.metadata.disabled);
 
-		if (isDenied) {
+		if (isDenied || isIneligible) {
 			deniedEntityIds.add(entity.entityId);
 		}
 
-		if (isAllowed && !isDenied) {
+		if (isAllowed && !isDenied && !isIneligible) {
 			allowedEntityIds.add(entity.entityId);
 		}
 	}

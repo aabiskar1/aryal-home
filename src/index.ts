@@ -1,6 +1,8 @@
 import {loadEntityPolicy} from './config/policy.js';
+import {env} from './config/env.js';
 import {getHomeAssistantStates} from './home-assistant/client.js';
 import {discoverEntities} from './home-assistant/discovery.js';
+import {getHomeAssistantRegistries} from './home-assistant/registry-client.js';
 import {normalizeStates} from './home-assistant/state-normalizer.js';
 import {requestOllamaChat} from './ollama/client.js';
 import {createPlan} from './planning/planner.js';
@@ -8,11 +10,12 @@ import {validatePlan} from './planning/policy.js';
 import {resolveEntityPolicy, selectAllowedEntities} from './policy/resolver.js';
 
 const main = async (instruction: string): Promise<void> => {
-	const [states, configuredPolicy] = await Promise.all([
+	const [states, configuredPolicy, registries] = await Promise.all([
 		getHomeAssistantStates(),
 		loadEntityPolicy(),
+		getHomeAssistantRegistries(env.HA_URL, env.HA_TOKEN),
 	]);
-	const discoveredEntities = discoverEntities(states);
+	const discoveredEntities = discoverEntities(states, registries);
 	const resolvedPolicy = resolveEntityPolicy(discoveredEntities, configuredPolicy);
 	const allowedEntities = selectAllowedEntities(discoveredEntities, resolvedPolicy);
 	const normalizedStates = normalizeStates(allowedEntities);

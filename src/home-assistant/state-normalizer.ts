@@ -28,7 +28,13 @@ export const normalizeState = (entity: DiscoveredEntity): NormalizedEntityState 
 		state: homeAssistantState.state,
 		name: getStringAttribute(homeAssistantState.attributes, 'friendly_name'),
 		area: getStringAttribute(homeAssistantState.attributes, 'area_name'),
-		supportedActions: getSupportedActions(entity.domain),
+		supportedActions:
+			homeAssistantState.state === 'unavailable' ||
+			homeAssistantState.state === 'unknown' ||
+			(entity.metadata.status === 'unavailable' && entity.metadata.reason === 'incomplete') ||
+			(entity.metadata.status === 'available' && entity.metadata.disabled)
+				? []
+				: getSupportedActions(entity.domain),
 	};
 };
 

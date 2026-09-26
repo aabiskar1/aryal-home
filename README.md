@@ -41,7 +41,9 @@ execution stage is intentionally absent while those boundaries are developed and
 ```mermaid
 flowchart TD
     HA[Home Assistant] -->|REST /api/states| HV[Validate external state with Zod]
+    HA -->|WebSocket registry lists| RG[Validate entity, device, area and label metadata]
     HV --> D[Discover current entities and derive domains]
+    RG --> D
     P[Local selector policy] --> R[Resolve allowed and denied entities]
     D --> R
     R --> N[Normalize approved state]
@@ -59,16 +61,19 @@ flowchart TD
 Discovery determines what exists. Policy determines what the AI may reason about or propose
 actions for. Finding an entity in Home Assistant never grants permission by itself.
 
-The current discovery source is `/api/states`. Authoritative device, area, and label relationships
-will require separate Home Assistant registry discovery and are not implemented yet.
+Current state comes from REST `/api/states`. A short-lived, read-only Home Assistant WebSocket
+connection retrieves entity, device, area, and label registries for internal policy resolution.
+Registry-only entries never become controllable entities. Registry metadata is not sent to Ollama.
 
 ## Implemented capabilities
 
 - Home Assistant REST state retrieval.
 - Zod validation at external and model-output boundaries.
 - Generic discovery of entities present in current Home Assistant state.
+- Validated registry-backed device, effective-area, and label discovery, with explicit unavailable
+  metadata handling and conditional REST-only fallback for conclusive legacy rules.
 - Deterministic domain derivation from `entity_id`.
-- Versioned entity policy with `entityId` and `domain` selectors.
+- Version 1 `entityId`/`domain` selectors and version 2 `deviceId`/`areaId`/`labelId` selectors.
 - Default-deny and deny-overrides-allow policy behavior.
 - State normalization before model exposure.
 - Local Ollama `/api/chat` integration with a configurable model.
@@ -284,7 +289,7 @@ Implemented:
 
 - Home Assistant state retrieval and external-data validation.
 - Policy-approved state normalization.
-- Generic state-based discovery and selector policy.
+- Registry-enriched state discovery and versioned selector policy.
 - Read-only local LLM planning with structured outcomes.
 - Deterministic capability and service modelling.
 - Canonical action and service semantics.
@@ -292,8 +297,7 @@ Implemented:
 
 Planned:
 
-- Home Assistant registry-backed discovery for devices, areas, and labels.
-- `areaId`, `deviceId`, and `labelId` policy selectors.
+- Relevant-state selection and compact context ranking.
 - Richer capability-aware normalization.
 - Deterministic action and service-data validation.
 - Controlled Home Assistant execution with confirmation.

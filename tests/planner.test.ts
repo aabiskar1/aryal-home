@@ -2,6 +2,7 @@ import {describe, expect, it} from 'vitest';
 import {ZodError} from 'zod';
 import type {CanonicalAction} from '../src/home-assistant/capabilities.js';
 import {discoverEntities} from '../src/home-assistant/discovery.js';
+import type {RegistrySnapshot} from '../src/home-assistant/registry-client.js';
 import {normalizeStates} from '../src/home-assistant/state-normalizer.js';
 import type {HomeAssistantState} from '../src/home-assistant/schemas.js';
 import type {OllamaChatRequest, OllamaChatTransport} from '../src/ollama/client.js';
@@ -18,6 +19,64 @@ const makeTransport =
 	};
 
 describe('createPlan', () => {
+	it('keeps registry identifiers and labels out of the Ollama payload', async () => {
+		const requests: OllamaChatRequest[] = [];
+		const state: HomeAssistantState = {
+			entity_id: 'light.example_light',
+			state: 'on',
+			attributes: {friendly_name: 'Example Light'},
+			last_changed: '2026-09-09T20:00:00+00:00',
+			last_updated: '2026-09-09T20:00:00+00:00',
+		};
+		const registries: RegistrySnapshot = {
+			status: 'available',
+			entities: [
+				{
+					entity_id: state.entity_id,
+					device_id: 'private_device_marker',
+					area_id: 'private_area_marker',
+					labels: ['private_label_marker'],
+					disabled_by: null,
+				},
+			],
+			devices: [
+				{
+					id: 'private_device_marker',
+					area_id: null,
+					labels: [],
+					disabled_by: null,
+					parent_device_id: null,
+				},
+			],
+			areas: [{area_id: 'private_area_marker', labels: []}],
+			labels: [{label_id: 'private_label_marker'}],
+		};
+		const discovered = discoverEntities([state], registries);
+		const policy = resolveEntityPolicy(discovered, {
+			version: 2,
+			allow: [{labelId: 'private_label_marker'}],
+			deny: [],
+		});
+		const states = normalizeStates(selectAllowedEntities(discovered, policy));
+
+		await createPlan(
+			{instruction: 'Assess the example light.', states},
+			makeTransport(
+				JSON.stringify({
+					outcome: 'no_action',
+					summary: 'Proposed plan: No action is needed.',
+					actions: [],
+				}),
+				requests,
+			),
+		);
+
+		const payload = JSON.stringify(requests);
+		expect(states).toHaveLength(1);
+		expect(payload).not.toContain('private_device_marker');
+		expect(payload).not.toContain('private_area_marker');
+		expect(payload).not.toContain('private_label_marker');
+	});
 	it('accepts propose_actions with at least one action', async () => {
 		const requests: OllamaChatRequest[] = [];
 		const plan = await createPlan(

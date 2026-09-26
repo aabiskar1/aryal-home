@@ -120,7 +120,8 @@ describe('entityPolicySchema', () => {
 			name: 'an unknown selector field',
 			policy: {version: 1, allow: [{areaId: 'example_area'}], deny: []},
 		},
-		{name: 'an unsupported version', policy: {version: 2, allow: [], deny: []}},
+		{name: 'an unsupported version', policy: {version: 3, allow: [], deny: []}},
+		{name: 'an unknown v2 selector field', policy: {version: 2, allow: [{roomId: 'x'}], deny: []}},
 	])('rejects $name', ({policy}) => {
 		expect(() => entityPolicySchema.parse(policy)).toThrow(ZodError);
 	});

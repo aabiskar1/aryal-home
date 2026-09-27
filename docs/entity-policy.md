@@ -47,3 +47,7 @@ missing referenced device) withholds control, including for version 1 policies. 
 entities or devices and entities whose current state is `unavailable` or `unknown` also cannot be
 proposed for control. Registry IDs and labels stay inside discovery and policy resolution; they
 are not included in Ollama state context.
+
+Relevance selection runs after this policy is resolved. It may reduce which permitted entities
+reach the model, but it cannot grant access or bypass a deny. Post-model action validation requires
+both full-policy permission and membership in the exact selected model context.

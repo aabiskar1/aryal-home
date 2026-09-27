@@ -48,7 +48,7 @@ describe('createPlan', () => {
 					parent_device_id: null,
 				},
 			],
-			areas: [{area_id: 'private_area_marker', labels: []}],
+			areas: [{area_id: 'private_area_marker', name: 'Example Room', aliases: [], labels: []}],
 			labels: [{label_id: 'private_label_marker'}],
 		};
 		const discovered = discoverEntities([state], registries);
@@ -123,6 +123,8 @@ describe('createPlan', () => {
 					state: 'on',
 					name: 'Example Light',
 					area: 'Example Room',
+					deviceClass: undefined,
+					unit: undefined,
 					supportedActions: ['turn_on', 'turn_off'],
 				},
 			],

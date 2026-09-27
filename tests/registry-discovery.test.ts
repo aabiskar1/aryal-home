@@ -47,8 +47,13 @@ const snapshot = (): Extract<RegistrySnapshot, {status: 'available'}> => ({
 		},
 	],
 	areas: [
-		{area_id: 'area_override', labels: ['label_area']},
-		{area_id: 'area_parent', labels: []},
+		{
+			area_id: 'area_override',
+			name: 'Example Override',
+			aliases: ['Example Alias'],
+			labels: ['label_area'],
+		},
+		{area_id: 'area_parent', name: 'Example Parent', aliases: [], labels: []},
 	],
 	labels: ['label_entity', 'label_device', 'label_parent', 'label_area'].map((label_id) => ({
 		label_id,
@@ -72,6 +77,8 @@ describe('registry-backed discovery', () => {
 			status: 'available',
 			deviceId: 'device_child',
 			areaId: 'area_override',
+			areaName: 'Example Override',
+			areaAliases: ['Example Alias'],
 			labels: {entity: ['label_entity'], device: ['label_device'], area: ['label_area']},
 			disabled: false,
 		});
@@ -101,6 +108,8 @@ describe('registry-backed discovery', () => {
 			status: 'available',
 			deviceId: undefined,
 			areaId: undefined,
+			areaName: undefined,
+			areaAliases: [],
 			labels: {entity: [], device: [], area: []},
 			disabled: false,
 		});

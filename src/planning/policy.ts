@@ -3,7 +3,7 @@ import {resolveAction, type ResolvedAction} from '../home-assistant/capabilities
 import type {ResolvedEntityPolicy} from '../policy/resolver.js';
 import type {Plan, PlanOutcome, ProposedAction} from './schemas.js';
 
-export type RejectionReason = 'denied' | 'not_allowed' | 'unsupported_action';
+export type RejectionReason = 'denied' | 'not_allowed' | 'not_in_context' | 'unsupported_action';
 
 export type ValidatedAction = ProposedAction & ResolvedAction;
 
@@ -19,7 +19,11 @@ export type PlanValidationResult = {
 	rejectedActions: RejectedAction[];
 };
 
-export const validatePlan = (plan: Plan, policy: ResolvedEntityPolicy): PlanValidationResult => {
+export const validatePlan = (
+	plan: Plan,
+	policy: ResolvedEntityPolicy,
+	contextEntityIds: ReadonlySet<string>,
+): PlanValidationResult => {
 	const actions: ValidatedAction[] = [];
 	const rejectedActions: RejectedAction[] = [];
 
@@ -35,10 +39,14 @@ export const validatePlan = (plan: Plan, policy: ResolvedEntityPolicy): PlanVali
 		if (policy.deniedEntityIds.has(action.entityId)) {
 			reason = 'denied';
 		} else if (policy.allowedEntityIds.has(action.entityId)) {
-			resolvedAction = resolveAction(getDomainFromEntityId(action.entityId), action.action);
+			if (contextEntityIds.has(action.entityId)) {
+				resolvedAction = resolveAction(getDomainFromEntityId(action.entityId), action.action);
 
-			if (resolvedAction === undefined) {
-				reason = 'unsupported_action';
+				if (resolvedAction === undefined) {
+					reason = 'unsupported_action';
+				}
+			} else {
+				reason = 'not_in_context';
 			}
 		} else {
 			reason = 'not_allowed';

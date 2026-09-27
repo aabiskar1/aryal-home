@@ -21,6 +21,8 @@ export const deviceRegistryEntrySchema = z.object({
 
 export const areaRegistryEntrySchema = z.object({
 	area_id: identifier,
+	name: identifier,
+	aliases: z.array(identifier).optional().default([]),
 	labels: labelIds,
 });
 

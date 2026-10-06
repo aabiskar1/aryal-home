@@ -62,7 +62,21 @@ Readiness has separate outcomes: `ready` when at least one command is prepared, 
 readiness rejects all planning-accepted proposals, and preserved planning `no_action` or
 `insufficient_context` outcomes. Rejected proposals do not become a readiness `no_action` conclusion.
 
-The application stops after preparation. Home Assistant execution is not implemented. Any future
-dispatcher must revalidate current policy and state immediately before dispatch; planning-time
-permission and execution readiness alone are insufficient. Keep critical infrastructure denylisted
-and never permit autonomous unlocking.
+The planning CLI stops after preparation. An independent `revalidateForDispatch()` boundary reloads
+states, registries, and the local policy once per batch, reruns discovery, and resolves policy over
+the fresh inventory. Removed allows, newly matching denies, and changed effective area/device/label
+metadata can therefore reject a previously ready command. Deny still overrides allow; no planning
+permission is reused. Current target eligibility is checked before policy rejection diagnostics.
+
+Fresh registry failure rejects this boundary even when legacy selectors could conclusively allow
+REST-only planning: disablement cannot be established without fresh registry metadata. Incomplete
+relationships, disabled targets, ambiguous target state, and unknown/unavailable state also withhold
+dispatch authorization. See [fresh revalidation](../README.md#fresh-pre-dispatch-revalidation) for
+the full outcome and rejection semantics.
+
+Passing commands are reconstructed as the distinct `DispatchAuthorizedCommand` type with exact
+application-owned domain/service/target fields and no service data. The boundary stops there.
+Home Assistant execution is not implemented. A future dispatcher must invoke fresh validation
+immediately before dispatch and repeat it after deferral; planning-time readiness and earlier
+authorization are not permanent permission. Keep critical infrastructure denylisted and never
+permit autonomous unlocking.

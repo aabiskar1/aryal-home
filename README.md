@@ -57,11 +57,14 @@ flowchart TD
     PV --> ER[Reject duplicates, conflicts and snapshot no-ops]
     ER --> CMD[Construct application-owned execution-ready commands]
     CMD --> C[Read-only CLI output and STOP]
-    CMD -. future .-> RV[Fresh policy and state revalidation]
-    RV -. not implemented .-> E[Home Assistant service execution and confirmation]
+    CMD -. independently invoked .-> FR[Read fresh states, registries and policy once per batch]
+    FR --> RV[Fresh authorization, eligibility, capability and no-op checks]
+    RV --> DAC[Dispatch-authorized commands and STOP]
+    DAC -. not implemented .-> E[Home Assistant service dispatch]
+    E -. not implemented .-> CONF[Home Assistant result confirmation]
 
     classDef future fill:#f5f5f5,stroke:#888,stroke-dasharray:5 5,color:#555;
-    class RV,E future;
+    class E,CONF future;
 ```
 
 Discovery determines what exists. Policy determines what the AI may reason about or propose
@@ -98,12 +101,15 @@ selected entity. Relevance selection runs only after policy resolution and never
 - Deterministic duplicate, conflict, and no-op rejection using selected normalized state.
 - Application-owned execution-ready commands with strict domain/service/target schemas and no
   arbitrary service data.
+- Independent read-only pre-dispatch revalidation against freshly retrieved state, registries, and
+  current policy, producing distinct dispatch-authorized commands.
 - Read-only planning from a command-line instruction.
 
 The local model's proposed plan is experimental and may be incomplete or incorrect. The
 application validates its structure, entity policy, supported actions, and execution readiness
 before displaying proposals and prepared commands.
-Execution and final execution-boundary validation are planned, not implemented.
+Fresh pre-dispatch validation is available as an independent function. Home Assistant execution
+and result confirmation are not implemented.
 
 Unknown domains expose no supported control actions. The model proposes only canonical action
 names; the application derives the domain and resolves the corresponding Home Assistant service.
@@ -128,13 +134,16 @@ The current design follows these principles:
 - No-op checks use the exact selected normalized planning snapshot.
 - Service commands contain application-owned domain, service, and a single entity target. No
   model reason, arbitrary target, or service data is copied into a command.
-- Any future execution stage must revalidate policy and state immediately before dispatch.
+- Fresh pre-dispatch validation reloads state, registries, and policy for the whole batch.
+- A future dispatcher must invoke fresh validation immediately before dispatch and repeat it if
+  commands are deferred. Neither command type represents permanent permission.
 - The current application makes no Home Assistant service calls.
 
 Post-model policy validation covers entity policy and canonical power-action capabilities for
 `light` and `switch`. A separate execution-readiness layer rejects duplicates, conflicts, and
-snapshot no-ops and constructs minimal commands. Readiness is based on the planning snapshot;
-fresh policy/state revalidation and actual execution are not implemented.
+snapshot no-ops and constructs minimal commands. Readiness is based on the planning snapshot.
+Independent fresh pre-dispatch validation checks current authorization and state; actual execution
+remains unimplemented. The planning CLI stops at execution-ready commands.
 
 ## Relevance selection and context budget
 
@@ -227,6 +236,9 @@ The representations have separate responsibilities:
 - **Execution-ready command (`ExecutionReadyCommand`):** a distinct branded, immutable type
   constructed by `src/execution/readiness.ts` after deterministic readiness checks. The brand marks
   application construction; it is not authorization to dispatch against a later state or policy.
+- **Dispatch-authorized command (`DispatchAuthorizedCommand`):** a separate branded, immutable type
+  reconstructed by `src/execution/revalidation.ts` after fresh pre-dispatch checks. It records
+  authorization against that fresh batch and must not be cached as permanent permission.
 
 `runPlanningPipeline()` preserves `validatedPlan` and adds a separate `executionReadiness` result
 with accepted proposals, rejected proposals, commands, and an outcome. Readiness processes only
@@ -273,11 +285,82 @@ Readiness uses its own `ExecutionReadinessOutcome`, separate from planning outco
 proposed but deterministic readiness checks rejected every planning-accepted proposal. The original
 planning result remains available for diagnostics, and no replacement actions are generated.
 
-Processing stops after command preparation and read-only CLI output. No Home Assistant services
-are called, no fresh snapshot is fetched, and `DRY_RUN` does not enable dispatch. A future dispatcher
-must consume the distinct command type, revalidate current policy and state immediately before
-dispatch, and confirm Home Assistant results before reporting success. Critical infrastructure
-denials and the prohibition on autonomous unlocking must remain enforced.
+The planning CLI stops after command preparation and read-only output. It does not automatically
+invoke fresh revalidation. `DRY_RUN` does not enable dispatch. Critical infrastructure denials and
+the prohibition on autonomous unlocking must remain enforced.
+
+## Fresh pre-dispatch revalidation
+
+The lifecycle is:
+
+```text
+Model proposal → planning-validated proposal → execution-ready command (planning snapshot)
+→ fresh pre-dispatch revalidation → dispatch-authorized command → STOP
+→ future service dispatch → future result confirmation
+```
+
+`revalidateForDispatch(commands)` in `src/execution/revalidation.ts` is an independent, read-only
+boundary for a future dispatcher. For each nonempty batch it invokes the existing REST state reader,
+registry reader, and local policy loader once each, concurrently. It validates those inputs, reruns
+discovery/enrichment, and resolves current policy against the newly discovered inventory. It accepts
+no planning snapshot or previously resolved policy and has no snapshot cache. Empty input performs
+no reads and needs no credential-dependent imports.
+
+Every command is checked against the same fresh batch. The incoming brand grants no authority:
+strict shape validation rejects extra fields, service data, and arbitrary target shapes. The stage
+requires a unique existing target with complete eligible metadata and a known binary state. It
+then applies current deny/allow policy, derives the domain from the fresh entity ID, re-resolves
+the canonical capability/service, checks exact routing agreement, and independently rejects fresh
+no-ops. Authorized domain/service/target objects are newly constructed, strictly validated, and
+frozen; incoming objects are never returned as authorized commands.
+
+Unlike the conditional REST-only planning fallback, an unavailable registry snapshot rejects the
+fresh batch because current disablement cannot be established. Missing or invalid state/policy
+reads also reject the batch, without falling back to planning inputs or exposing transport errors.
+Duplicate registry IDs invalidate the snapshot. Duplicate fresh state entries or repeated command
+targets reject affected commands as ambiguous; no first/last-wins decision is made.
+
+`PreDispatchRevalidationResult` contains authorized `commands` and one ordered `decisions` entry
+per input command, including its original index. Outcomes are independent of planning/readiness:
+
+| Outcome       | Meaning                                                                  |
+| ------------- | ------------------------------------------------------------------------ |
+| `authorized`  | At least one command passed, including mixed authorized/rejected batches |
+| `rejected`    | Commands were supplied and none passed                                   |
+| `no_commands` | Input was empty; no fresh reads occurred                                 |
+
+Rejection reasons are deterministic:
+
+| Reason                 | Meaning                                                                      |
+| ---------------------- | ---------------------------------------------------------------------------- |
+| `invalid_command`      | Incoming shape, target syntax, or extra payload fields are invalid           |
+| `snapshot_unavailable` | A fresh read or schema validation failed, or registry data is unavailable    |
+| `target_missing`       | Target no longer appears in fresh REST state                                 |
+| `ambiguous_target`     | Fresh state has duplicate target entries or the batch repeats a target       |
+| `ineligible_state`     | Target is disabled, metadata is incomplete, or state is not known `on`/`off` |
+| `denied`               | Current policy denies the target, overriding allows                          |
+| `not_allowed`          | Current policy no longer grants permission                                   |
+| `unsupported_action`   | The current capability catalogue cannot resolve or support the action        |
+| `routing_mismatch`     | Supplied domain/service differs from deterministic current routing           |
+| `fresh_no_op`          | Current state already satisfies the command                                  |
+
+Shape and batch-read failures are checked first, followed by repeated targets, target existence and
+eligibility, current policy, capability/routing, and fresh no-op checks. Eligibility is checked before
+policy diagnostics so unknown/disabled targets are distinguished from policy denial. Diagnostics
+include indices, validated entity IDs, reason codes, and reconstructed commands; no registry IDs,
+labels, snapshot metadata, arbitrary input payloads, or transport errors are included. Mixed batches
+retain passing commands in input order without inventing replacements.
+
+`FreshSnapshotReaders` is an optional trusted adapter seam for testing. Adapters must make new
+reads on every invocation and must never return a cached planning snapshot. Production defaults
+reuse the existing Home Assistant readers and policy loader. No dispatch adapter is present.
+
+Fresh checks reduce drift between planning and future dispatch. State, registries, and policy reads
+are not an atomic Home Assistant transaction, and state or policy can change after validation.
+A future dispatcher must use this boundary immediately before sending commands, repeat it after
+any delay, and confirm Home Assistant results before claiming success. This PR adds no service
+calls, dispatch retries, or result confirmation. The fresh stage stops at dispatch-authorized
+commands, and Home Assistant service execution remains unimplemented.
 
 ## Requirements
 
@@ -400,6 +483,7 @@ Implemented:
   generation.
 - Deterministic duplicate/conflict/no-op validation and minimal application-owned command
   construction, using the selected planning snapshot.
+- Independent fresh policy/state/registry revalidation and distinct dispatch-authorized commands.
 
 Planned:
 
@@ -407,7 +491,7 @@ Planned:
 - Richer capability-aware normalization.
 - Typed validation for richer action/service data if capabilities are extended.
 - Controlled Home Assistant execution with confirmation.
-- Fresh policy and state validation immediately before dispatch.
+- Integration of fresh revalidation into the future dispatcher immediately before each batch.
 
 Execution will not be added until the deterministic authorization and validation boundaries are in
 place.

@@ -260,10 +260,18 @@ Target and command objects are frozen. Model reason text and proposal routing fi
 influence command construction. Rejection diagnostics retain the existing planning proposal
 fields and machine-readable reasons, without adding registry metadata.
 
-A mixed result keeps only ready commands and reports `propose_actions`. If every planning-accepted
-proposal is rejected, readiness reports `no_action`; the original planning result remains available
-for diagnostics. Existing empty `no_action` and `insufficient_context` outcomes are preserved.
-No replacement actions are generated.
+Readiness uses its own `ExecutionReadinessOutcome`, separate from planning outcomes:
+
+| Planning outcome       | Execution-ready commands                              | Readiness outcome      |
+| ---------------------- | ----------------------------------------------------- | ---------------------- |
+| `propose_actions`      | At least one, including mixed accepted/rejected plans | `ready`                |
+| `propose_actions`      | None; every planning-accepted proposal was rejected   | `rejected`             |
+| `no_action`            | None                                                  | `no_action`            |
+| `insufficient_context` | None                                                  | `insufficient_context` |
+
+`no_action` preserves a planning conclusion that no action is needed. `rejected` means actions were
+proposed but deterministic readiness checks rejected every planning-accepted proposal. The original
+planning result remains available for diagnostics, and no replacement actions are generated.
 
 Processing stops after command preparation and read-only CLI output. No Home Assistant services
 are called, no fresh snapshot is fetched, and `DRY_RUN` does not enable dispatch. A future dispatcher

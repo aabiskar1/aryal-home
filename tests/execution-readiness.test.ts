@@ -49,7 +49,7 @@ describe('execution readiness', () => {
 		const plan = validatedPlan([proposal(entityId, action)]);
 		const result = prepareExecutionReadyCommands(plan, [state(entityId, currentState)]);
 
-		expect(result.outcome).toBe('propose_actions');
+		expect(result.outcome).toBe('ready');
 		expect(result.commands).toEqual([{domain, service: action, target: {entity_id: entityId}}]);
 		expect(result.acceptedActions).toEqual(plan.actions);
 		expect(result.rejectedActions).toEqual([]);
@@ -65,7 +65,7 @@ describe('execution readiness', () => {
 		const plan = validatedPlan([proposal(entityId, action)]);
 		const result = prepareExecutionReadyCommands(plan, [state(entityId, currentState)]);
 
-		expect(result.outcome).toBe('no_action');
+		expect(result.outcome).toBe('rejected');
 		expect(result.commands).toEqual([]);
 		expect(result.acceptedActions).toEqual([]);
 		expect(result.rejectedActions).toEqual([{action: plan.actions[0], reason: 'no_op'}]);
@@ -79,7 +79,7 @@ describe('execution readiness', () => {
 		const plan = validatedPlan([action, {...action, reason: 'A different model explanation.'}]);
 		const result = prepareExecutionReadyCommands(plan, [state(action.entityId)]);
 
-		expect(result.outcome).toBe('no_action');
+		expect(result.outcome).toBe('rejected');
 		expect(result.commands).toEqual([]);
 		expect(result.rejectedActions).toEqual(
 			plan.actions.map((item) => ({action: item, reason: 'duplicate_action'})),
@@ -95,7 +95,7 @@ describe('execution readiness', () => {
 		const plan = validatedPlan(actions.map((action) => proposal(entityId, action)));
 		const result = prepareExecutionReadyCommands(plan, [state(entityId)]);
 
-		expect(result.outcome).toBe('no_action');
+		expect(result.outcome).toBe('rejected');
 		expect(result.commands).toEqual([]);
 		expect(result.rejectedActions).toEqual(
 			plan.actions.map((action) => ({action, reason: 'conflicting_actions'})),
@@ -135,7 +135,7 @@ describe('execution readiness', () => {
 			state('light.example_conflict'),
 		]);
 
-		expect(result.outcome).toBe('propose_actions');
+		expect(result.outcome).toBe('ready');
 		expect(result.acceptedActions).toEqual([plan.actions[0]]);
 		expect(result.commands).toEqual([
 			{domain: 'switch', service: 'turn_on', target: {entity_id: 'switch.example_ready'}},

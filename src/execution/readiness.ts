@@ -7,7 +7,6 @@ import {
 import {getDomainFromEntityId} from '../home-assistant/discovery.js';
 import type {NormalizedEntityState} from '../home-assistant/state-normalizer.js';
 import type {PlanValidationResult, ValidatedAction} from '../planning/policy.js';
-import type {PlanOutcome} from '../planning/schemas.js';
 
 // Private construction boundary: no service data or descriptive model text is admitted.
 const executionReadyCommandSchema = z
@@ -25,6 +24,8 @@ const executionReadyCommandSchema = z
 // Construction provenance only; future dispatch still requires fresh policy/state validation.
 export type ExecutionReadyCommand = z.infer<typeof executionReadyCommandSchema>;
 
+export type ExecutionReadinessOutcome = 'ready' | 'no_action' | 'rejected' | 'insufficient_context';
+
 export type ReadinessRejectionReason =
 	| 'duplicate_action'
 	| 'conflicting_actions'
@@ -34,7 +35,7 @@ export type ReadinessRejectionReason =
 	| 'unsupported_action';
 
 export type ExecutionReadinessResult = {
-	outcome: PlanOutcome;
+	outcome: ExecutionReadinessOutcome;
 	commands: ExecutionReadyCommand[];
 	acceptedActions: ValidatedAction[];
 	rejectedActions: Array<{action: ValidatedAction; reason: ReadinessRejectionReason}>;
@@ -131,9 +132,9 @@ export const prepareExecutionReadyCommands = (
 		acceptedActions.push(action);
 	}
 
+	const proposedActionsOutcome = commands.length > 0 ? 'ready' : 'rejected';
 	return {
-		outcome:
-			plan.outcome === 'propose_actions' && commands.length === 0 ? 'no_action' : plan.outcome,
+		outcome: plan.outcome === 'propose_actions' ? proposedActionsOutcome : plan.outcome,
 		commands,
 		acceptedActions,
 		rejectedActions,

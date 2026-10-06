@@ -93,6 +93,7 @@ describe('planning pipeline with relevance selection', () => {
 
 		expect(result.selection.states.map((item) => item.entityId)).toEqual([states[1]!.entity_id]);
 		expect(result.validatedPlan.actions).toHaveLength(1);
+		expect(result.executionReadiness.outcome).toBe('ready');
 		expect(result.executionReadiness.commands).toEqual([
 			{domain: 'light', service: 'turn_on', target: {entity_id: states[1]!.entity_id}},
 		]);
@@ -267,7 +268,7 @@ describe('planning pipeline with relevance selection', () => {
 
 		expect(result.validatedPlan.outcome).toBe('propose_actions');
 		expect(result.validatedPlan.actions).toHaveLength(actions.length);
-		expect(result.executionReadiness.outcome).toBe('no_action');
+		expect(result.executionReadiness.outcome).toBe('rejected');
 		expect(result.executionReadiness.commands).toEqual([]);
 		expect(result.executionReadiness.rejectedActions.map((item) => item.reason)).toEqual(
 			actions.map(() => reason),
@@ -307,7 +308,7 @@ describe('planning pipeline with relevance selection', () => {
 			'denied',
 			'unsupported_action',
 		]);
-		expect(result.executionReadiness.outcome).toBe('propose_actions');
+		expect(result.executionReadiness.outcome).toBe('ready');
 		expect(result.executionReadiness.commands).toEqual([
 			{domain: 'light', service: 'turn_on', target: {entity_id: ready.entity_id}},
 		]);

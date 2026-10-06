@@ -77,8 +77,24 @@ dispatch authorization. See [fresh revalidation](../README.md#fresh-pre-dispatch
 the full outcome and rejection semantics.
 
 Passing commands are reconstructed as the distinct `DispatchAuthorizedCommand` type with exact
-application-owned domain/service/target fields and no service data. The boundary stops there.
-Home Assistant execution is not implemented. A future dispatcher must invoke fresh validation
-immediately before dispatch and repeat it after deferral; planning-time readiness and earlier
-authorization are not permanent permission. Keep critical infrastructure denylisted and never
-permit autonomous unlocking.
+application-owned domain/service/target fields and no service data. Revalidation itself remains
+read-only. The separate production `executeReadyCommands()` API revalidates the initial batch, sends
+only newly authorized commands to its private dispatcher, and performs sequential light/switch
+`turn_on`/`turn_off` service POSTs with exactly one `entity_id`. No arbitrary service data is accepted.
+DRY_RUN=true blocks the execution API before any fresh authorization or confirmation reads, returning
+the dedicated execution_disabled outcome and dry_run reason rather than a policy rejection or success.
+Only DRY_RUN=false permits deliberate execution. The raw transport, HTTP client, and confirmation
+helpers are non-exported and colocated with the private dispatcher; there is no direct transport API
+or test bypass. A private POST guard also enforces DRY_RUN before any service request.
+Later eligible commands are revalidated again immediately before their POST, since earlier execution
+and confirmation deferred them. Initial rejections stay rejected; no old authorization is cached or
+queued. Planning-time readiness and earlier authorization are not permanent permission.
+
+Each successful service response requires a fresh target-state read before reporting `confirmed`.
+At most three reads, 250 ms apart for binary state mismatches, accommodate short state-reporting
+delays. Missing, ineligible, malformed, or unreadable state fails confirmation immediately. HTTP
+success alone is not execution success. Partial success is reported without rollback or POST retries.
+See [execution and confirmation](../README.md#deliberate-execution-and-confirmation) for result types,
+failure reasons, transport bounds, and lifecycle. The planning CLI stays non-executing; delayed commands
+must be freshly revalidated again. Keep critical infrastructure denylisted and never permit autonomous
+unlocking.

@@ -20,8 +20,8 @@ normalized state and produces structured proposed actions that are schema-valida
 against deterministic entity policy. Application code checks execution readiness and constructs
 minimal service commands from accepted proposals using the planning snapshot.
 
-> **Status:** Early development. Read-only AI planning is experimental. The current implementation
-> cannot execute Home Assistant service calls.
+> **Status:** Early development. The planning CLI remains read-only. A separate deliberate execution
+> API can control policy-approved lights and switches with fresh authorization and state confirmation.
 
 ## Why this project exists
 
@@ -34,8 +34,8 @@ should remain separate:
 - **Execution:** making an approved Home Assistant service call and confirming its result.
 
 An LLM is useful for interpreting intent and proposing a plan, but natural-language output is not
-authorization. ARYAL keeps policy and validation in deterministic application code. The
-execution stage is intentionally absent while those boundaries are developed and tested.
+authorization. ARYAL keeps policy, validation, service construction, and execution confirmation
+in deterministic application code.
 
 ## Architecture
 
@@ -57,14 +57,13 @@ flowchart TD
     PV --> ER[Reject duplicates, conflicts and snapshot no-ops]
     ER --> CMD[Construct application-owned execution-ready commands]
     CMD --> C[Read-only CLI output and STOP]
-    CMD -. independently invoked .-> FR[Read fresh states, registries and policy once per batch]
+    CMD -. deliberate execution API .-> FR[Read fresh states, registries and policy]
     FR --> RV[Fresh authorization, eligibility, capability and no-op checks]
-    RV --> DAC[Dispatch-authorized commands and STOP]
-    DAC -. not implemented .-> E[Home Assistant service dispatch]
-    E -. not implemented .-> CONF[Home Assistant result confirmation]
-
-    classDef future fill:#f5f5f5,stroke:#888,stroke-dasharray:5 5,color:#555;
-    class E,CONF future;
+    RV --> DAC[Short-lived dispatch-authorized commands]
+    DAC --> E[Sequential light/switch turn_on/turn_off POST]
+    E --> CONF[Fresh target-state confirmation]
+    CONF --> RESULT[Confirmed or failed per-command results]
+    CONF -->|Reauthorize each later command| FR
 ```
 
 Discovery determines what exists. Policy determines what the AI may reason about or propose
@@ -104,12 +103,14 @@ selected entity. Relevance selection runs only after policy resolution and never
 - Independent read-only pre-dispatch revalidation against freshly retrieved state, registries, and
   current policy, producing distinct dispatch-authorized commands.
 - Read-only planning from a command-line instruction.
+- Separate deliberate execution API for sequential light/switch power services with bounded fresh
+  confirmation reads, explicit partial results, and no automatic service retries.
 
 The local model's proposed plan is experimental and may be incomplete or incorrect. The
 application validates its structure, entity policy, supported actions, and execution readiness
 before displaying proposals and prepared commands.
-Fresh pre-dispatch validation is available as an independent function. Home Assistant execution
-and result confirmation are not implemented.
+Fresh pre-dispatch validation remains independently available. The separate execution API always
+uses it before dispatch and requires fresh confirmation before reporting success.
 
 Unknown domains expose no supported control actions. The model proposes only canonical action
 names; the application derives the domain and resolves the corresponding Home Assistant service.
@@ -135,15 +136,16 @@ The current design follows these principles:
 - Service commands contain application-owned domain, service, and a single entity target. No
   model reason, arbitrary target, or service data is copied into a command.
 - Fresh pre-dispatch validation reloads state, registries, and policy for the whole batch.
-- A future dispatcher must invoke fresh validation immediately before dispatch and repeat it if
-  commands are deferred. Neither command type represents permanent permission.
-- The current application makes no Home Assistant service calls.
+- Execution invokes fresh validation immediately before dispatch and repeats it for later commands
+  deferred by earlier dispatch/confirmation. Neither command type represents permanent permission.
+- Only light/switch `turn_on` and `turn_off` can execute, with a single entity target and no arbitrary
+  service data. Successful HTTP responses require separate fresh state confirmation.
 
 Post-model policy validation covers entity policy and canonical power-action capabilities for
 `light` and `switch`. A separate execution-readiness layer rejects duplicates, conflicts, and
 snapshot no-ops and constructs minimal commands. Readiness is based on the planning snapshot.
-Independent fresh pre-dispatch validation checks current authorization and state; actual execution
-remains unimplemented. The planning CLI stops at execution-ready commands.
+Independent fresh pre-dispatch validation checks current authorization and state before the explicit
+execution API dispatches. The planning CLI stops at execution-ready commands.
 
 ## Relevance selection and context budget
 
@@ -222,7 +224,8 @@ consistency rules:
 
 The model does not provide a domain, service name, or service data. After entity-policy checks, the
 application derives the domain from the entity ID and resolves the action through its deterministic
-capability catalogue. These validated proposals are still not executed by the current application.
+capability catalogue. These validated proposals remain planning-only; execution requires the
+separate readiness, fresh authorization, and dispatch boundaries.
 
 ## Execution readiness
 
@@ -295,12 +298,12 @@ The lifecycle is:
 
 ```text
 Model proposal → planning-validated proposal → execution-ready command (planning snapshot)
-→ fresh pre-dispatch revalidation → dispatch-authorized command → STOP
-→ future service dispatch → future result confirmation
+→ fresh pre-dispatch revalidation → dispatch-authorized command
+→ Home Assistant service POST → fresh confirmation → confirmed/failed execution result
 ```
 
 `revalidateForDispatch(commands)` in `src/execution/revalidation.ts` is an independent, read-only
-boundary for a future dispatcher. For each nonempty batch it invokes the existing REST state reader,
+boundary used by the dispatcher. For each nonempty batch it invokes the existing REST state reader,
 registry reader, and local policy loader once each, concurrently. It validates those inputs, reruns
 discovery/enrichment, and resolves current policy against the newly discovered inventory. It accepts
 no planning snapshot or previously resolved policy and has no snapshot cache. Empty input performs
@@ -354,14 +357,88 @@ retain passing commands in input order without inventing replacements.
 `revalidateForDispatch(commands)` always uses the existing Home Assistant state reader, registry
 reader, and current policy loader. Production callers cannot supply alternative readers or a cached
 planning snapshot. Reader wiring is private; tests mock the read dependencies without exposing a
-production injection API. No dispatch adapter is present.
+production injection API.
 
-Fresh checks reduce drift between planning and future dispatch. State, registries, and policy reads
+Fresh checks reduce drift between planning and dispatch. State, registries, and policy reads
 are not an atomic Home Assistant transaction, and state or policy can change after validation.
-A future dispatcher must use this boundary immediately before sending commands, repeat it after
-any delay, and confirm Home Assistant results before claiming success. This PR adds no service
-calls, dispatch retries, or result confirmation. The fresh stage stops at dispatch-authorized
-commands, and Home Assistant service execution remains unimplemented.
+The fresh stage itself remains read-only and stops at dispatch-authorized commands. The deliberate
+execution API below dispatches immediately, repeats revalidation after deferral, and confirms results.
+
+## Deliberate execution and confirmation
+
+`executeReadyCommands(commands)` in `src/execution/dispatcher.ts` is the sole production execution
+entry point. It accepts `readonly ExecutionReadyCommand[]`, runs `revalidateForDispatch()` with its
+production-owned fresh readers, and sends only newly reconstructed `DispatchAuthorizedCommand`
+objects to the private dispatcher. With `DRY_RUN=true`, it returns `execution_disabled` before
+any authorization, service, or confirmation reads; per-input entries have the same outcome with
+reason `dry_run` and no authorized command fields. Raw model proposals and planning-time `ValidatedAction` objects
+cannot enter that dispatcher. No reader, transport, payload, or routing override is accepted.
+
+The initial whole-batch validation preserves duplicate/conflict rejection. Commands execute in input
+order, one POST followed by its confirmation before the next command. Each later initially authorized
+command is revalidated again against fresh state, registries, and policy immediately before its POST,
+because earlier dispatch and confirmation deferred it. Initial rejections remain rejected. There is
+no authorization cache, execution queue, replacement action, rollback, or service-call retry.
+Dispatch authorization is short-lived: any delayed execution requires revalidation again.
+
+The non-exported transport colocated in `src/execution/dispatcher.ts` independently checks strict command
+shape and re-derives routing using the application capability catalogue. The only endpoints reachable
+are `/api/services/light/turn_on`, `/api/services/light/turn_off`,
+`/api/services/switch/turn_on`, and `/api/services/switch/turn_off`. Bodies contain exactly
+`{"entity_id":"<single entity>"}`. No brightness, arbitrary service data, area/device target,
+model reason, request options, or other capability is accepted. The transport, HTTP client, confirmation
+reader, and lower dispatcher are private to the module. No transport object, factory, or testing
+bypass is exported; integrations can invoke only `executeReadyCommands()`. The private POST helper
+also checks `DRY_RUN` as a backstop before issuing a request.
+The build clears generated `dist` output before compiling so deleted transport exports cannot survive
+as stale executable files.
+The transport follows the [Home Assistant REST service contract](https://developers.home-assistant.io/docs/api/rest/#post-apiservicesdomainservice)
+and validates the changed-state list response, including an empty list. That response never confirms
+the requested result.
+
+After a valid 2xx service response, a new GET of `/api/states/<entity_id>` must report `on` for
+`turn_on` or `off` for `turn_off`. Confirmation permits at most three uncached reads, with 250 ms
+between reads only when a valid binary state mismatches. A missing target (404), unknown/unavailable
+or other non-binary state, wrong response target, malformed response, or read failure fails immediately.
+POST requests have a 5-second timeout; confirmation reads have a 2-second timeout. Automatic HTTP
+retries and redirects are disabled for this transport. Confirmation therefore allows at most 500 ms
+of polling delay plus three bounded reads. No success is reported from HTTP status alone.
+
+`ExecutionResult` contains ordered `CommandExecutionResult` entries with original input indices:
+
+| Per-command outcome      | Meaning                                                      |
+| ------------------------ | ------------------------------------------------------------ |
+| `execution_disabled`     | Configuration blocks execution; no authorization or dispatch |
+| `confirmed`              | Fresh target state matches the requested power action        |
+| `dispatch_failed`        | Service request, status, or response validation failed       |
+| `confirmation_failed`    | POST succeeded but fresh state could not confirm the result  |
+| `skipped_not_authorized` | Initial or repeated fresh validation rejected the command    |
+
+Configuration-disabled entries use `dry_run`, separately from policy rejection reasons.
+Dispatch failures use `service_request_failed`. Confirmation failures use `confirmation_read_failed`,
+`target_missing`, `ineligible_state`, or `state_mismatch`; skipped commands retain the existing fresh
+validation reason. Results contain only validated command fields, indices, and reason codes, with
+no transport errors, response bodies, credentials, or registry metadata.
+
+| Batch outcome            | Meaning                                                           |
+| ------------------------ | ----------------------------------------------------------------- |
+| `execution_disabled`     | DRY_RUN blocks execution, including for empty input               |
+| `all_confirmed`          | Every input command was dispatched and confirmed                  |
+| `partial_success`        | At least one confirmed; another failed or was skipped             |
+| `all_failed`             | At least one dispatch attempted, but none confirmed               |
+| `no_authorized_commands` | No dispatch attempted, including empty or entirely rejected input |
+
+Partial success is explicit: an earlier state change is not rolled back if a later command fails.
+A failed or timed-out request can still have changed Home Assistant state; failure means ARYAL could
+not establish confirmed success. Do not automatically resubmit a failed batch. Confirmation establishes
+Home Assistant's observed state, not permanent state or independent physical-device verification.
+
+The existing planning CLI never imports or invokes execution and stays read-only for both settings.
+`DRY_RUN` defaults to true and is a global execution backstop: the execution API makes zero service
+POSTs, confirmation reads, or fresh authorization reads while it is true. It reports configuration
+disablement, never simulated authorization or success. With `DRY_RUN=false`, deliberately calling
+`executeReadyCommands()` enables the existing fresh authorization, sequential dispatch, and confirmation
+flow. Disabling DRY_RUN does not make the planning CLI execute.
 
 ## Requirements
 
@@ -414,7 +491,8 @@ PLANNING_REQUEST_MAX_BYTES=24576
 
 Set `HA_URL`, `HA_TOKEN`, `OLLAMA_URL`, and `OLLAMA_MODEL` for your environment. Adjust
 `PLANNING_REQUEST_MAX_BYTES` if the complete selected request exceeds your local model budget.
-The current implementation has no service-execution path.
+The planning CLI remains read-only regardless of `DRY_RUN`. Service execution requires deliberately
+calling the separate `executeReadyCommands()` API with `DRY_RUN=false`.
 
 Create the local entity policy:
 
@@ -485,17 +563,17 @@ Implemented:
 - Deterministic duplicate/conflict/no-op validation and minimal application-owned command
   construction, using the selected planning snapshot.
 - Independent fresh policy/state/registry revalidation and distinct dispatch-authorized commands.
+- Sequential light/switch power-service execution through a separate API, with fresh confirmation.
 
 Planned:
 
 - AI-assisted relevance selection, if needed after deterministic selection is evaluated.
 - Richer capability-aware normalization.
 - Typed validation for richer action/service data if capabilities are extended.
-- Controlled Home Assistant execution with confirmation.
-- Integration of fresh revalidation into the future dispatcher immediately before each batch.
+- Further operational execution controls and integration, without widening the current capability scope.
 
-Execution will not be added until the deterministic authorization and validation boundaries are in
-place.
+The execution API preserves the deterministic authorization and validation boundaries; the planning
+CLI has no execution mode.
 
 ## Privacy
 
@@ -524,5 +602,5 @@ Licensed under the [Apache License 2.0](LICENSE). See [NOTICE](NOTICE) for attri
 ## Contributing and project maturity
 
 This is an early-stage personal open-source project. Changes should stay focused, preserve the
-read-only safety boundary, include relevant tests, and pass the complete development verification
-suite before submission.
+planning and execution safety boundaries, include relevant tests, and pass the complete development
+verification suite before submission.

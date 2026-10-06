@@ -53,6 +53,7 @@ Do not weaken these requirements without explicit approval:
 - Never claim success unless Home Assistant confirms the action.
 - Never permit autonomous unlocking.
 - Keep critical infrastructure entities denylisted.
+- DRY_RUN=true must prevent every Home Assistant service POST, including through the execution API.
 
 ## Repository and privacy rules
 
@@ -123,7 +124,15 @@ Implemented:
 - Read-only Ollama planning with structured output validation
 - Post-model validation against the resolved entity policy
 - Discovery, policy, normalization, planning, and validation tests
+- Registry enrichment, relevance selection, and deterministic execution readiness
+- Fresh pre-dispatch policy/state revalidation with production-owned readers
+- Separate sequential light/switch turn_on/turn_off dispatch API with fresh state confirmation
 
-Current milestone: generic state-based entity discovery and read-only Ollama planning. Registry
-discovery and capability normalization are future milestones. The model may generate validated
-proposed actions, but do not implement Home Assistant service execution as part of this milestone.
+The planning CLI remains read-only and stops at execution-ready commands. Deliberate execution uses
+`executeReadyCommands()` to freshly authorize commands, dispatch only `DispatchAuthorizedCommand`
+objects, and confirm current Home Assistant target state. Keep the lower-level dispatcher private.
+Service transport and confirmation helpers must remain non-exported within that same module.
+DRY_RUN=true returns execution_disabled before authorization or confirmation reads; DRY_RUN=false
+permits deliberately invoking the execution API. The planning CLI stays read-only in both cases.
+Revalidate later commands after earlier dispatch/confirmation deferral. Do not broaden execution
+beyond light/switch turn_on and turn_off or accept arbitrary service data without explicit scope.

@@ -123,7 +123,12 @@ Implemented:
 - Read-only Ollama planning with structured output validation
 - Post-model validation against the resolved entity policy
 - Discovery, policy, normalization, planning, and validation tests
+- Registry enrichment, relevance selection, and deterministic execution readiness
+- Fresh pre-dispatch policy/state revalidation with production-owned readers
+- Separate sequential light/switch turn_on/turn_off dispatch API with fresh state confirmation
 
-Current milestone: generic state-based entity discovery and read-only Ollama planning. Registry
-discovery and capability normalization are future milestones. The model may generate validated
-proposed actions, but do not implement Home Assistant service execution as part of this milestone.
+The planning CLI remains read-only and stops at execution-ready commands. Deliberate execution uses
+`executeReadyCommands()` to freshly authorize commands, dispatch only `DispatchAuthorizedCommand`
+objects, and confirm current Home Assistant target state. Keep the lower-level dispatcher private.
+Revalidate later commands after earlier dispatch/confirmation deferral. Do not broaden execution
+beyond light/switch turn_on and turn_off or accept arbitrary service data without explicit scope.

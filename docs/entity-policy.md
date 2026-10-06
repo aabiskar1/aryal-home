@@ -51,3 +51,18 @@ are not included in Ollama state context.
 Relevance selection runs after this policy is resolved. It may reduce which permitted entities
 reach the model, but it cannot grant access or bypass a deny. Post-model action validation requires
 both full-policy permission and membership in the exact selected model context.
+
+Planning-time `ValidatedAction` proposals then enter a separate deterministic execution-readiness
+layer. It rejects duplicates, conflicting actions, and no-ops against the selected normalized
+snapshot, and constructs application-owned domain/service/single-entity-target commands with no
+service data. Readiness cannot grant permission or recover a proposal rejected by policy or context
+validation. See [execution readiness](../README.md#execution-readiness) for rejection semantics.
+
+Readiness has separate outcomes: `ready` when at least one command is prepared, `rejected` when
+readiness rejects all planning-accepted proposals, and preserved planning `no_action` or
+`insufficient_context` outcomes. Rejected proposals do not become a readiness `no_action` conclusion.
+
+The application stops after preparation. Home Assistant execution is not implemented. Any future
+dispatcher must revalidate current policy and state immediately before dispatch; planning-time
+permission and execution readiness alone are insufficient. Keep critical infrastructure denylisted
+and never permit autonomous unlocking.

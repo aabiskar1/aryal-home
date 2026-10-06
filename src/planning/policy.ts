@@ -5,6 +5,7 @@ import type {Plan, PlanOutcome, ProposedAction} from './schemas.js';
 
 export type RejectionReason = 'denied' | 'not_allowed' | 'not_in_context' | 'unsupported_action';
 
+// Planning-time authorization only; this is not an execution-ready service command.
 export type ValidatedAction = ProposedAction & ResolvedAction;
 
 export type RejectedAction = {

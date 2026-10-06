@@ -67,6 +67,8 @@ states, registries, and the local policy once per batch, reruns discovery, and r
 the fresh inventory. Removed allows, newly matching denies, and changed effective area/device/label
 metadata can therefore reject a previously ready command. Deny still overrides allow; no planning
 permission is reused. Current target eligibility is checked before policy rejection diagnostics.
+The production function accepts commands only and owns its state, registry, and policy reader wiring;
+callers cannot replace those readers with cached snapshots. Tests mock the underlying read dependencies.
 
 Fresh registry failure rejects this boundary even when legacy selectors could conclusively allow
 REST-only planning: disablement cannot be established without fresh registry metadata. Incomplete

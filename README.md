@@ -351,9 +351,10 @@ include indices, validated entity IDs, reason codes, and reconstructed commands;
 labels, snapshot metadata, arbitrary input payloads, or transport errors are included. Mixed batches
 retain passing commands in input order without inventing replacements.
 
-`FreshSnapshotReaders` is an optional trusted adapter seam for testing. Adapters must make new
-reads on every invocation and must never return a cached planning snapshot. Production defaults
-reuse the existing Home Assistant readers and policy loader. No dispatch adapter is present.
+`revalidateForDispatch(commands)` always uses the existing Home Assistant state reader, registry
+reader, and current policy loader. Production callers cannot supply alternative readers or a cached
+planning snapshot. Reader wiring is private; tests mock the read dependencies without exposing a
+production injection API. No dispatch adapter is present.
 
 Fresh checks reduce drift between planning and future dispatch. State, registries, and policy reads
 are not an atomic Home Assistant transaction, and state or policy can change after validation.

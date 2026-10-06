@@ -7,7 +7,7 @@ import {
 import {
 	revalidateForDispatch,
 	type DispatchAuthorizedCommand,
-	type FreshSnapshotReaders,
+	type PreDispatchRevalidationResult,
 } from '../src/execution/revalidation.js';
 import * as capabilities from '../src/home-assistant/capabilities.js';
 import {discoverEntities} from '../src/home-assistant/discovery.js';
@@ -91,10 +91,21 @@ const readers = (
 	metadata: RegistrySnapshot = registries(states.map((item) => item.entity_id)),
 	policy: EntityPolicy = allowPolicy,
 ) => ({
-	getStates: vi.fn<FreshSnapshotReaders['getStates']>().mockResolvedValue(states),
-	getRegistries: vi.fn<FreshSnapshotReaders['getRegistries']>().mockResolvedValue(metadata),
-	loadPolicy: vi.fn<FreshSnapshotReaders['loadPolicy']>().mockResolvedValue(policy),
+	getStates: vi.fn<() => Promise<HomeAssistantState[]>>().mockResolvedValue(states),
+	getRegistries: vi.fn<() => Promise<RegistrySnapshot>>().mockResolvedValue(metadata),
+	loadPolicy: vi.fn<() => Promise<EntityPolicy>>().mockResolvedValue(policy),
 });
+
+// Test-only fixture wiring; every call still enters the production function and its real readers.
+const revalidateWithMockedReaders = async (
+	commands: readonly ExecutionReadyCommand[],
+	source = readers(),
+) => {
+	http.get.mockReturnValue({json: source.getStates});
+	vi.mocked(getHomeAssistantRegistries).mockImplementation(source.getRegistries);
+	vi.mocked(loadEntityPolicy).mockImplementation(source.loadPolicy);
+	return revalidateForDispatch(commands);
+};
 
 afterEach(() => {
 	vi.restoreAllMocks();
@@ -102,6 +113,30 @@ afterEach(() => {
 });
 
 describe('fresh pre-dispatch revalidation', () => {
+	it('does not accept caller-supplied readers even when passed as an extra runtime argument', async () => {
+		expectTypeOf<typeof revalidateForDispatch>().parameters.toEqualTypeOf<
+			[commands: readonly ExecutionReadyCommand[]]
+		>();
+		const staleReaders = readers();
+		http.get.mockReturnValue({json: async () => [state(target, 'on')]});
+		vi.mocked(getHomeAssistantRegistries).mockResolvedValue(registries());
+		vi.mocked(loadEntityPolicy).mockResolvedValue(allowPolicy);
+		const result = (await Reflect.apply(revalidateForDispatch, undefined, [
+			[ready()],
+			staleReaders,
+		])) as PreDispatchRevalidationResult;
+
+		expect(result.outcome).toBe('rejected');
+		expect(result.decisions[0]).toMatchObject({reason: 'fresh_no_op'});
+		expect(staleReaders.getStates).not.toHaveBeenCalled();
+		expect(staleReaders.getRegistries).not.toHaveBeenCalled();
+		expect(staleReaders.loadPolicy).not.toHaveBeenCalled();
+		expect(http.get).toHaveBeenCalledExactlyOnceWith('states');
+		expect(getHomeAssistantRegistries).toHaveBeenCalledTimes(1);
+		expect(loadEntityPolicy).toHaveBeenCalledTimes(1);
+		expect(http.post).not.toHaveBeenCalled();
+	});
+
 	it.each([
 		{entityId: target, action: 'turn_on' as const, currentState: 'off'},
 		{entityId: target, action: 'turn_off' as const, currentState: 'on'},
@@ -111,7 +146,7 @@ describe('fresh pre-dispatch revalidation', () => {
 		'authorizes $entityId $action from fresh $currentState',
 		async ({entityId, action, currentState}) => {
 			const command = ready(entityId, action);
-			const result = await revalidateForDispatch(
+			const result = await revalidateWithMockedReaders(
 				[command],
 				readers([state(entityId, currentState)]),
 			);
@@ -134,7 +169,7 @@ describe('fresh pre-dispatch revalidation', () => {
 	])(
 		'rejects $action when fresh state is already $currentState',
 		async ({action, currentState}) => {
-			const result = await revalidateForDispatch(
+			const result = await revalidateWithMockedReaders(
 				[ready(target, action)],
 				readers([state(target, currentState)]),
 			);
@@ -148,7 +183,7 @@ describe('fresh pre-dispatch revalidation', () => {
 	);
 
 	it('rejects a target removed from fresh states even if it remains in the registry', async () => {
-		const result = await revalidateForDispatch([ready()], readers([], registries()));
+		const result = await revalidateWithMockedReaders([ready()], readers([], registries()));
 
 		expect(result.commands).toEqual([]);
 		expect(result.decisions[0]).toMatchObject({status: 'rejected', reason: 'target_missing'});
@@ -157,7 +192,7 @@ describe('fresh pre-dispatch revalidation', () => {
 	it.each(['unavailable', 'unknown', 'unexpected'])(
 		'rejects fresh state %s as ineligible',
 		async (value) => {
-			const result = await revalidateForDispatch([ready()], readers([state(target, value)]));
+			const result = await revalidateWithMockedReaders([ready()], readers([state(target, value)]));
 
 			expect(result.outcome).toBe('rejected');
 			expect(result.commands).toEqual([]);
@@ -176,7 +211,7 @@ describe('fresh pre-dispatch revalidation', () => {
 			metadata.devices.push({id: 'example_parent', area_id: null, labels: [], disabled_by: 'user'});
 		}
 
-		const result = await revalidateForDispatch([ready()], readers([state()], metadata));
+		const result = await revalidateWithMockedReaders([ready()], readers([state()], metadata));
 
 		expect(result.commands).toEqual([]);
 		expect(result.decisions[0]).toMatchObject({status: 'rejected', reason: 'ineligible_state'});
@@ -192,7 +227,7 @@ describe('fresh pre-dispatch revalidation', () => {
 			metadata.labels = [];
 		}
 
-		const result = await revalidateForDispatch([ready()], readers([state()], metadata));
+		const result = await revalidateWithMockedReaders([ready()], readers([state()], metadata));
 
 		expect(result.commands).toEqual([]);
 		expect(result.decisions[0]).toMatchObject({status: 'rejected', reason: 'ineligible_state'});
@@ -200,7 +235,7 @@ describe('fresh pre-dispatch revalidation', () => {
 
 	it('rejects a removed allow rule using the newly loaded policy', async () => {
 		const command = ready();
-		const result = await revalidateForDispatch(
+		const result = await revalidateWithMockedReaders(
 			[command],
 			readers([state()], registries(), {
 				version: 1,
@@ -215,7 +250,7 @@ describe('fresh pre-dispatch revalidation', () => {
 
 	it('preserves deny-overrides-allow when a deny is added after planning', async () => {
 		const command = ready();
-		const result = await revalidateForDispatch(
+		const result = await revalidateWithMockedReaders(
 			[command],
 			readers([state()], registries(), {
 				...allowPolicy,
@@ -258,7 +293,10 @@ describe('fresh pre-dispatch revalidation', () => {
 				metadata.entities[0]!.labels = [];
 			}
 
-			const result = await revalidateForDispatch([command], readers([state()], metadata, policy));
+			const result = await revalidateWithMockedReaders(
+				[command],
+				readers([state()], metadata, policy),
+			);
 
 			expect(result.commands).toEqual([]);
 			expect(result.decisions[0]).toMatchObject({status: 'rejected', reason: 'not_allowed'});
@@ -275,7 +313,10 @@ describe('fresh pre-dispatch revalidation', () => {
 		const metadata = registries();
 		metadata.entities[0]!.labels.push('example_denied');
 		metadata.labels.push({label_id: 'example_denied'});
-		const result = await revalidateForDispatch([command], readers([state()], metadata, policy));
+		const result = await revalidateWithMockedReaders(
+			[command],
+			readers([state()], metadata, policy),
+		);
 
 		expect(result.commands).toEqual([]);
 		expect(result.decisions[0]).toMatchObject({status: 'rejected', reason: 'denied'});
@@ -286,7 +327,7 @@ describe('fresh pre-dispatch revalidation', () => {
 		async (change) => {
 			const untrusted = {...ready(), ...change};
 			const command = untrusted as ExecutionReadyCommand;
-			const result = await revalidateForDispatch([command], readers());
+			const result = await revalidateWithMockedReaders([command], readers());
 
 			expect(result.commands).toEqual([]);
 			expect(result.decisions[0]).toMatchObject({status: 'rejected', reason: 'routing_mismatch'});
@@ -303,7 +344,7 @@ describe('fresh pre-dispatch revalidation', () => {
 				vi.spyOn(capabilities, method).mockReturnValue(undefined);
 			}
 
-			const result = await revalidateForDispatch([command], readers());
+			const result = await revalidateWithMockedReaders([command], readers());
 
 			expect(result.commands).toEqual([]);
 			expect(result.decisions[0]).toMatchObject({status: 'rejected', reason: 'unsupported_action'});
@@ -316,7 +357,7 @@ describe('fresh pre-dispatch revalidation', () => {
 	])('compares against freshly resolved routing %j', async (resolved) => {
 		const command = ready();
 		vi.spyOn(capabilities, 'resolveAction').mockReturnValue(resolved);
-		const result = await revalidateForDispatch([command], readers());
+		const result = await revalidateWithMockedReaders([command], readers());
 
 		expect(result.commands).toEqual([]);
 		expect(result.decisions[0]).toMatchObject({status: 'rejected', reason: 'routing_mismatch'});
@@ -329,7 +370,7 @@ describe('fresh pre-dispatch revalidation', () => {
 			service: 'turn_on',
 			target: {entity_id: entityId},
 		} as unknown as ExecutionReadyCommand;
-		const result = await revalidateForDispatch(
+		const result = await revalidateWithMockedReaders(
 			[command],
 			readers([state(entityId)], registries([entityId]), {
 				version: 1,
@@ -345,7 +386,7 @@ describe('fresh pre-dispatch revalidation', () => {
 	it('uses one fresh snapshot and policy resolution for multiple commands in input order', async () => {
 		const commands = [ready(other), ready()];
 		const source = readers([state(), state(other)]);
-		const result = await revalidateForDispatch(commands, source);
+		const result = await revalidateWithMockedReaders(commands, source);
 
 		expect(result.outcome).toBe('authorized');
 		expect(result.commands).toEqual(commands);
@@ -357,7 +398,7 @@ describe('fresh pre-dispatch revalidation', () => {
 
 	it('preserves ordered decisions in a mixed batch without replacing rejected commands', async () => {
 		const commands = [ready(), ready(other), ready('light.example_missing')];
-		const result = await revalidateForDispatch(
+		const result = await revalidateWithMockedReaders(
 			commands,
 			readers([state(target, 'on'), state(other)]),
 		);
@@ -372,7 +413,7 @@ describe('fresh pre-dispatch revalidation', () => {
 	});
 
 	it('distinguishes an entirely rejected batch from empty input', async () => {
-		const result = await revalidateForDispatch(
+		const result = await revalidateWithMockedReaders(
 			[ready(), ready(other)],
 			readers([state(target, 'on')]),
 		);
@@ -384,7 +425,7 @@ describe('fresh pre-dispatch revalidation', () => {
 
 	it('returns no_commands without reading any state, registries, or policy', async () => {
 		const source = readers();
-		expect(await revalidateForDispatch([], source)).toEqual({
+		expect(await revalidateWithMockedReaders([], source)).toEqual({
 			outcome: 'no_commands',
 			commands: [],
 			decisions: [],
@@ -403,16 +444,16 @@ describe('fresh pre-dispatch revalidation', () => {
 	it('reads a new snapshot and policy on every invocation instead of caching planning inputs', async () => {
 		const command = ready();
 		const source = readers();
-		const initial = await revalidateForDispatch([command], source);
+		const initial = await revalidateWithMockedReaders([command], source);
 		expect(initial.outcome).toBe('authorized');
 		source.getStates.mockResolvedValue([state(target, 'on')]);
-		const changedState = await revalidateForDispatch([command], source);
+		const changedState = await revalidateWithMockedReaders([command], source);
 		expect(changedState.decisions[0]).toMatchObject({
 			reason: 'fresh_no_op',
 		});
 		source.getStates.mockResolvedValue([state()]);
 		source.loadPolicy.mockResolvedValue({version: 1, allow: [], deny: []});
-		const changedPolicy = await revalidateForDispatch([command], source);
+		const changedPolicy = await revalidateWithMockedReaders([command], source);
 		expect(changedPolicy.decisions[0]).toMatchObject({
 			reason: 'not_allowed',
 		});
@@ -429,7 +470,7 @@ describe('fresh pre-dispatch revalidation', () => {
 			commands[0] = ready(other);
 			return [state(), state(other)];
 		});
-		const result = await revalidateForDispatch(commands, source);
+		const result = await revalidateWithMockedReaders(commands, source);
 
 		expect(commands[0]?.target.entity_id).toBe(other);
 		expect(result.commands).toEqual([original]);
@@ -440,7 +481,7 @@ describe('fresh pre-dispatch revalidation', () => {
 		async (method) => {
 			const source = readers([state(), state(other)]);
 			source[method].mockRejectedValue(new Error('Example sensitive transport details.'));
-			const result = await revalidateForDispatch([ready(), ready(other)], source);
+			const result = await revalidateWithMockedReaders([ready(), ready(other)], source);
 
 			expect(result.outcome).toBe('rejected');
 			expect(result.commands).toEqual([]);
@@ -453,7 +494,7 @@ describe('fresh pre-dispatch revalidation', () => {
 	);
 
 	it('rejects registry failure even for conclusive legacy policy', async () => {
-		const result = await revalidateForDispatch(
+		const result = await revalidateWithMockedReaders(
 			[ready()],
 			readers([state()], {status: 'unavailable'}),
 		);
@@ -469,7 +510,7 @@ describe('fresh pre-dispatch revalidation', () => {
 			allow: [],
 			deny: [],
 		} as unknown as EntityPolicy);
-		const result = await revalidateForDispatch([ready()], source);
+		const result = await revalidateWithMockedReaders([ready()], source);
 
 		expect(result.commands).toEqual([]);
 		expect(result.decisions[0]).toMatchObject({reason: 'snapshot_unavailable'});
@@ -478,7 +519,7 @@ describe('fresh pre-dispatch revalidation', () => {
 	it('rejects malformed fresh states', async () => {
 		const source = readers();
 		source.getStates.mockResolvedValue([{}] as HomeAssistantState[]);
-		const result = await revalidateForDispatch([ready()], source);
+		const result = await revalidateWithMockedReaders([ready()], source);
 
 		expect(result.commands).toEqual([]);
 		expect(result.decisions[0]).toMatchObject({reason: 'snapshot_unavailable'});
@@ -487,7 +528,7 @@ describe('fresh pre-dispatch revalidation', () => {
 	it('rejects duplicate registry identifiers across the batch', async () => {
 		const metadata = registries([target, other]);
 		metadata.entities.push(metadata.entities[0]!);
-		const result = await revalidateForDispatch(
+		const result = await revalidateWithMockedReaders(
 			[ready(), ready(other)],
 			readers([state(), state(other)], metadata),
 		);
@@ -498,7 +539,7 @@ describe('fresh pre-dispatch revalidation', () => {
 	});
 
 	it('rejects ambiguous fresh target state while allowing an unrelated target', async () => {
-		const result = await revalidateForDispatch(
+		const result = await revalidateWithMockedReaders(
 			[ready(), ready(other)],
 			readers([state(), state(target, 'on'), state(other)], registries([target, other])),
 		);
@@ -510,7 +551,7 @@ describe('fresh pre-dispatch revalidation', () => {
 	it.each(['duplicate', 'conflict'])(
 		'rejects repeated batch targets with %s commands',
 		async (kind) => {
-			const result = await revalidateForDispatch(
+			const result = await revalidateWithMockedReaders(
 				[ready(), ready(target, kind === 'duplicate' ? 'turn_on' : 'turn_off')],
 				readers(),
 			);
@@ -532,7 +573,7 @@ describe('fresh pre-dispatch revalidation', () => {
 		{reason: 'Example model descriptive text.'},
 	])('rejects arbitrary input fields or targets %j without echoing payloads', async (change) => {
 		const command = {...ready(), ...change} as unknown as ExecutionReadyCommand;
-		const result = await revalidateForDispatch([command], readers());
+		const result = await revalidateWithMockedReaders([command], readers());
 
 		expect(result.commands).toEqual([]);
 		expect(result.decisions).toEqual([{index: 0, status: 'rejected', reason: 'invalid_command'}]);
@@ -541,7 +582,7 @@ describe('fresh pre-dispatch revalidation', () => {
 	it('returns only command fields and reason codes without fresh registry metadata', async () => {
 		const metadata = registries();
 		metadata.areas[0]!.name = 'Example Sensitive Room';
-		const result = await revalidateForDispatch([ready()], readers([state()], metadata));
+		const result = await revalidateWithMockedReaders([ready()], readers([state()], metadata));
 		const serialized = JSON.stringify(result);
 
 		expect(result.commands).toEqual([
@@ -553,7 +594,7 @@ describe('fresh pre-dispatch revalidation', () => {
 		expect(serialized).not.toContain('Sensitive Room');
 	});
 
-	it('uses the existing read-only REST and registry readers once per default batch even with DRY_RUN=false', async () => {
+	it('uses the existing read-only REST and registry readers once per batch even with DRY_RUN=false', async () => {
 		const commands = [ready(), ready(other)];
 		http.get.mockReturnValue({json: async () => [state(), state(other)]});
 		vi.mocked(getHomeAssistantRegistries).mockResolvedValue(registries([target, other]));

@@ -76,8 +76,8 @@ export type PreDispatchRevalidationResult = {
 	decisions: CommandRevalidationDecision[];
 };
 
-// Trusted read adapters; each must perform a new read per invocation, never serve a planning cache.
-export type FreshSnapshotReaders = {
+// Private wiring: production callers cannot replace the fresh readers with cached adapters.
+type FreshSnapshotReaders = {
 	getStates: () => Promise<HomeAssistantState[]>;
 	getRegistries: () => Promise<RegistrySnapshot>;
 	loadPolicy: () => Promise<EntityPolicy>;
@@ -205,7 +205,6 @@ const revalidateCommand = (
 /** Read-only future dispatch boundary. Re-fetch and authorize once per batch, then STOP. */
 export const revalidateForDispatch = async (
 	commands: readonly ExecutionReadyCommand[],
-	readers?: FreshSnapshotReaders,
 ): Promise<PreDispatchRevalidationResult> => {
 	if (commands.length === 0) {
 		return {outcome: 'no_commands', commands: [], decisions: []};
@@ -225,7 +224,7 @@ export const revalidateForDispatch = async (
 
 	let context: FreshContext | undefined;
 	try {
-		context = await readFreshContext(readers ?? (await defaultReaders()));
+		context = await readFreshContext(await defaultReaders());
 	} catch {
 		// Fail closed without returning transport errors, credentials, paths, or raw snapshot data.
 	}

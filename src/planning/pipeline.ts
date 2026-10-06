@@ -1,3 +1,7 @@
+import {
+	prepareExecutionReadyCommands,
+	type ExecutionReadinessResult,
+} from '../execution/readiness.js';
 import type {DiscoveredEntity} from '../home-assistant/discovery.js';
 import {normalizeState} from '../home-assistant/state-normalizer.js';
 import type {OllamaChatTransport} from '../ollama/client.js';
@@ -11,6 +15,7 @@ export type PlanningPipelineResult = {
 	selection: SelectionResult;
 	permittedCount: number;
 	validatedPlan: PlanValidationResult;
+	executionReadiness: ExecutionReadinessResult;
 };
 
 export type PipelineOptions = SelectionOptions & {chat: OllamaChatTransport};
@@ -40,18 +45,22 @@ export const runPlanningPipeline = async (
 	const selection = selectRelevantContext(instruction, candidates, options);
 
 	if (selection.kind === 'insufficient_context') {
+		const validatedPlan = validatePlan(insufficientPlan(selection.reason), policy, new Set());
 		return {
 			selection,
 			permittedCount: permitted.length,
-			validatedPlan: validatePlan(insufficientPlan(selection.reason), policy, new Set()),
+			validatedPlan,
+			executionReadiness: prepareExecutionReadyCommands(validatedPlan, []),
 		};
 	}
 
 	const plan = await createPlan({instruction, states: selection.states}, options.chat);
+	const validatedPlan = validatePlan(plan, policy, selection.contextEntityIds);
 
 	return {
 		selection,
 		permittedCount: permitted.length,
-		validatedPlan: validatePlan(plan, policy, selection.contextEntityIds),
+		validatedPlan,
+		executionReadiness: prepareExecutionReadyCommands(validatedPlan, selection.states),
 	};
 };

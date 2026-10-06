@@ -17,7 +17,8 @@ boundaries.
 
 Home Assistant remains the source of truth. The model receives only explicitly permitted,
 normalized state and produces structured proposed actions that are schema-validated and checked
-against deterministic entity policy.
+against deterministic entity policy. Application code checks execution readiness and constructs
+minimal service commands from accepted proposals using the planning snapshot.
 
 > **Status:** Early development. Read-only AI planning is experimental. The current implementation
 > cannot execute Home Assistant service calls.
@@ -53,11 +54,14 @@ flowchart TD
     I --> O
     O --> S[Validate structured plan with Zod]
     S --> PV[Validate full policy, selected context and capabilities]
-    PV --> C[Read-only CLI output]
-    PV -. not implemented .-> E[Home Assistant service execution]
+    PV --> ER[Reject duplicates, conflicts and snapshot no-ops]
+    ER --> CMD[Construct application-owned execution-ready commands]
+    CMD --> C[Read-only CLI output and STOP]
+    CMD -. future .-> RV[Fresh policy and state revalidation]
+    RV -. not implemented .-> E[Home Assistant service execution and confirmation]
 
     classDef future fill:#f5f5f5,stroke:#888,stroke-dasharray:5 5,color:#555;
-    class E future;
+    class RV,E future;
 ```
 
 Discovery determines what exists. Policy determines what the AI may reason about or propose
@@ -91,10 +95,14 @@ selected entity. Relevance selection runs only after policy resolution and never
 - Deterministic per-domain capability and Home Assistant service resolution.
 - Post-model validation against the full resolved policy, the exact selected model context, and
   the application-owned capability catalogue.
+- Deterministic duplicate, conflict, and no-op rejection using selected normalized state.
+- Application-owned execution-ready commands with strict domain/service/target schemas and no
+  arbitrary service data.
 - Read-only planning from a command-line instruction.
 
 The local model's proposed plan is experimental and may be incomplete or incorrect. The
-application validates its structure, entity policy, and supported actions before displaying it.
+application validates its structure, entity policy, supported actions, and execution readiness
+before displaying proposals and prepared commands.
 Execution and final execution-boundary validation are planned, not implemented.
 
 Unknown domains expose no supported control actions. The model proposes only canonical action
@@ -116,12 +124,17 @@ The current design follows these principles:
   its canonical Home Assistant service name.
 - Structured output constraints are enforced by application-side Zod validation, even when the
   same JSON Schema is supplied to Ollama.
-- Any future execution stage must revalidate policy at the final execution boundary.
+- Every duplicated entity/action occurrence and every conflicting proposal for an entity is rejected.
+- No-op checks use the exact selected normalized planning snapshot.
+- Service commands contain application-owned domain, service, and a single entity target. No
+  model reason, arbitrary target, or service data is copied into a command.
+- Any future execution stage must revalidate policy and state immediately before dispatch.
 - The current application makes no Home Assistant service calls.
 
-Post-model validation currently covers entity policy and canonical power-action capabilities for
-`light` and `switch`. It is not complete execution authorization: service data, duplicate actions,
-and no-op actions do not yet have the deterministic validation required for execution.
+Post-model policy validation covers entity policy and canonical power-action capabilities for
+`light` and `switch`. A separate execution-readiness layer rejects duplicates, conflicts, and
+snapshot no-ops and constructs minimal commands. Readiness is based on the planning snapshot;
+fresh policy/state revalidation and actual execution are not implemented.
 
 ## Relevance selection and context budget
 
@@ -201,6 +214,62 @@ consistency rules:
 The model does not provide a domain, service name, or service data. After entity-policy checks, the
 application derives the domain from the entity ID and resolves the action through its deterministic
 capability catalogue. These validated proposals are still not executed by the current application.
+
+## Execution readiness
+
+The representations have separate responsibilities:
+
+- **Model proposal (`ProposedAction`):** untrusted `entityId`, canonical `action`, and descriptive
+  `reason`, validated by the structured plan schema.
+- **Planning-time validated proposal (`ValidatedAction`):** a proposal that passed full-policy,
+  exact-context, and capability checks, with an application-derived domain and service. It remains
+  planning-only.
+- **Execution-ready command (`ExecutionReadyCommand`):** a distinct branded, immutable type
+  constructed by `src/execution/readiness.ts` after deterministic readiness checks. The brand marks
+  application construction; it is not authorization to dispatch against a later state or policy.
+
+`runPlanningPipeline()` preserves `validatedPlan` and adds a separate `executionReadiness` result
+with accepted proposals, rejected proposals, commands, and an outcome. Readiness processes only
+planning-accepted proposals and the exact selected normalized snapshot:
+
+1. Reject all proposals for an entity with contradictory actions as `conflicting_actions`, even
+   if one would be a no-op. Conflicts take precedence over duplicates.
+2. Reject every occurrence of repeated identical entity/action pairs as `duplicate_action`.
+   Different model reasons do not distinguish actions. There is no first/last-wins resolution.
+3. Require a unique selected state, a supported action, and a known binary `on`/`off` state.
+   Missing selected targets are `not_in_context`; ambiguous, non-binary, or ineligible normalized
+   state is `ineligible_state`. Inconsistent domains or unsupported command routing are rejected
+   as `unsupported_action`.
+4. Reject `turn_on` for an already-on target and `turn_off` for an already-off target as `no_op`.
+5. Independently derive the domain from the entity ID and resolve the canonical service through
+   the existing capability catalogue. Construct and validate an exact single-entity command.
+
+For example, a permitted, selected off light with a unique `turn_on` proposal produces:
+
+```json
+{
+	"domain": "light",
+	"service": "turn_on",
+	"target": {"entity_id": "light.example"}
+}
+```
+
+The private strict command schema admits only these fields and supported light/switch power
+services. Service data is explicitly absent: there is no `data` field or generic dictionary.
+Target and command objects are frozen. Model reason text and proposal routing fields never
+influence command construction. Rejection diagnostics retain the existing planning proposal
+fields and machine-readable reasons, without adding registry metadata.
+
+A mixed result keeps only ready commands and reports `propose_actions`. If every planning-accepted
+proposal is rejected, readiness reports `no_action`; the original planning result remains available
+for diagnostics. Existing empty `no_action` and `insufficient_context` outcomes are preserved.
+No replacement actions are generated.
+
+Processing stops after command preparation and read-only CLI output. No Home Assistant services
+are called, no fresh snapshot is fetched, and `DRY_RUN` does not enable dispatch. A future dispatcher
+must consume the distinct command type, revalidate current policy and state immediately before
+dispatch, and confirm Home Assistant results before reporting success. Critical infrastructure
+denials and the prohibition on autonomous unlocking must remain enforced.
 
 ## Requirements
 
@@ -282,8 +351,9 @@ node --env-file=.env dist/index.js \
 ```
 
 The CLI reports the number of received, discovered, and allowed entities; aggregate selection
-diagnostics; the validated plan outcome and summary; accepted and rejected proposals; and this
-final confirmation:
+diagnostics; the planning outcome and untrusted summary; planning-accepted proposals and rejection
+counts; the separate execution-readiness outcome, prepared commands, and readiness rejections;
+and this final confirmation:
 
 ```text
 No Home Assistant service calls were made.
@@ -320,14 +390,16 @@ Implemented:
 - Canonical action and service semantics.
 - Deterministic entity-policy, selected-context, capability, and service validation after model
   generation.
+- Deterministic duplicate/conflict/no-op validation and minimal application-owned command
+  construction, using the selected planning snapshot.
 
 Planned:
 
 - AI-assisted relevance selection, if needed after deterministic selection is evaluated.
 - Richer capability-aware normalization.
-- Deterministic action and service-data validation.
+- Typed validation for richer action/service data if capabilities are extended.
 - Controlled Home Assistant execution with confirmation.
-- Fresh policy validation at the final execution boundary.
+- Fresh policy and state validation immediately before dispatch.
 
 Execution will not be added until the deterministic authorization and validation boundaries are in
 place.

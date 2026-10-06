@@ -93,6 +93,10 @@ describe('planning pipeline with relevance selection', () => {
 
 		expect(result.selection.states.map((item) => item.entityId)).toEqual([states[1]!.entity_id]);
 		expect(result.validatedPlan.actions).toHaveLength(1);
+		expect(result.executionReadiness.commands).toEqual([
+			{domain: 'light', service: 'turn_on', target: {entity_id: states[1]!.entity_id}},
+		]);
+		expect(JSON.stringify(result.executionReadiness)).not.toContain('private_');
 		expect(JSON.stringify(request)).not.toContain(states[0]!.entity_id);
 		expect(JSON.stringify(request)).not.toContain('private_denied_device');
 		expect(JSON.stringify(request)).not.toContain('private_allowed_device');
@@ -107,6 +111,8 @@ describe('planning pipeline with relevance selection', () => {
 		});
 
 		expect(result.validatedPlan.actions).toEqual([]);
+		expect(result.executionReadiness.outcome).toBe('no_action');
+		expect(result.executionReadiness.commands).toEqual([]);
 		expect(result.validatedPlan.rejectedActions).toEqual([
 			{
 				action: {
@@ -126,6 +132,7 @@ describe('planning pipeline with relevance selection', () => {
 		});
 
 		expect(result.validatedPlan.rejectedActions[0]?.reason).toBe('denied');
+		expect(result.executionReadiness.commands).toEqual([]);
 	});
 
 	it('skips Ollama when there is no permitted targeted match', async () => {
@@ -141,6 +148,8 @@ describe('planning pipeline with relevance selection', () => {
 		expect(wasCalled).toBe(false);
 		expect(result.selection).toEqual({kind: 'insufficient_context', reason: 'no_permitted_match'});
 		expect(result.validatedPlan.outcome).toBe('insufficient_context');
+		expect(result.executionReadiness.outcome).toBe('insufficient_context');
+		expect(result.executionReadiness.commands).toEqual([]);
 	});
 
 	it('skips Ollama rather than truncating a complete over-budget selection', async () => {
@@ -156,6 +165,7 @@ describe('planning pipeline with relevance selection', () => {
 
 		expect(wasCalled).toBe(false);
 		expect(result.selection).toEqual({kind: 'insufficient_context', reason: 'over_budget'});
+		expect(result.executionReadiness.commands).toEqual([]);
 	});
 
 	it('emits only aggregate, non-identifying selection diagnostics', async () => {
@@ -231,5 +241,142 @@ describe('planning pipeline with relevance selection', () => {
 		expect(result.selection.kind).toBe('ready');
 		expect(result.validatedPlan.actions).toEqual([]);
 		expect(result.validatedPlan.rejectedActions[0]?.reason).toBe('unsupported_action');
+		expect(result.executionReadiness.commands).toEqual([]);
+		expect(result.executionReadiness.rejectedActions).toEqual([]);
+	});
+
+	it.each([
+		{actions: ['turn_on', 'turn_on'], reason: 'duplicate_action'},
+		{actions: ['turn_on', 'turn_off'], reason: 'conflicting_actions'},
+		{actions: ['turn_off'], reason: 'no_op'},
+	])('stops after rejecting $reason at readiness', async ({actions, reason}) => {
+		const entityId = states[1]!.entity_id;
+		const result = await runPlanningPipeline('Turn on kitchen lights', entities, policy, {
+			...options,
+			chat: async () =>
+				JSON.stringify({
+					outcome: 'propose_actions',
+					summary: 'Proposed plan: Change the example light.',
+					actions: actions.map((action) => ({
+						entityId,
+						action,
+						reason: 'The request asks for it.',
+					})),
+				}),
+		});
+
+		expect(result.validatedPlan.outcome).toBe('propose_actions');
+		expect(result.validatedPlan.actions).toHaveLength(actions.length);
+		expect(result.executionReadiness.outcome).toBe('no_action');
+		expect(result.executionReadiness.commands).toEqual([]);
+		expect(result.executionReadiness.rejectedActions.map((item) => item.reason)).toEqual(
+			actions.map(() => reason),
+		);
+	});
+
+	it('preserves both validation stages in a mixed plan', async () => {
+		const ready = state('light.example_ready', 'Ready Light');
+		const noOp = {...state('light.example_no_op', 'No-op Light'), state: 'on'};
+		const denied = state('light.example_denied', 'Denied Light');
+		const unsupported = state('sensor.example_temperature', 'Temperature');
+		const discovered = discoverEntities([ready, noOp, denied, unsupported]);
+		const fullPolicy = resolveEntityPolicy(discovered, {
+			version: 1,
+			allow: [{domain: 'light'}, {domain: 'sensor'}],
+			deny: [{entityId: denied.entity_id}],
+		});
+		const result = await runPlanningPipeline('Review permitted entities', discovered, fullPolicy, {
+			...options,
+			chat: async () =>
+				JSON.stringify({
+					outcome: 'propose_actions',
+					summary: 'Proposed plan: Turn on the example entities.',
+					actions: [ready, noOp, denied, unsupported].map((item) => ({
+						entityId: item.entity_id,
+						action: 'turn_on',
+						reason: 'The request asks for it.',
+					})),
+				}),
+		});
+
+		expect(result.validatedPlan.actions.map((action) => action.entityId)).toEqual([
+			ready.entity_id,
+			noOp.entity_id,
+		]);
+		expect(result.validatedPlan.rejectedActions.map((item) => item.reason)).toEqual([
+			'denied',
+			'unsupported_action',
+		]);
+		expect(result.executionReadiness.outcome).toBe('propose_actions');
+		expect(result.executionReadiness.commands).toEqual([
+			{domain: 'light', service: 'turn_on', target: {entity_id: ready.entity_id}},
+		]);
+		expect(result.executionReadiness.rejectedActions[0]?.reason).toBe('no_op');
+	});
+
+	it.each(['unknown', 'unavailable', 'disabled'])(
+		'keeps %s entities ineligible',
+		async (condition) => {
+			const unavailable = {
+				...state('light.example_ineligible', 'Ineligible Light'),
+				state: condition === 'disabled' ? 'off' : condition,
+			};
+			const discovered = discoverEntities([unavailable], {
+				status: 'available',
+				entities: [
+					{
+						entity_id: unavailable.entity_id,
+						device_id: null,
+						area_id: null,
+						labels: [],
+						disabled_by: condition === 'disabled' ? 'user' : null,
+					},
+				],
+				devices: [],
+				areas: [],
+				labels: [],
+			});
+			const fullPolicy = resolveEntityPolicy(discovered, {
+				version: 1,
+				allow: [{domain: 'light'}],
+				deny: [],
+			});
+			let wasCalled = false;
+			const result = await runPlanningPipeline('Turn on all lights', discovered, fullPolicy, {
+				...options,
+				async chat() {
+					wasCalled = true;
+					return plan(unavailable.entity_id);
+				},
+			});
+
+			expect(wasCalled).toBe(false);
+			expect(result.executionReadiness.outcome).toBe('insufficient_context');
+			expect(result.executionReadiness.commands).toEqual([]);
+		},
+	);
+
+	it('rejects model-owned service fields at the structured schema before readiness', async () => {
+		await expect(
+			runPlanningPipeline('Turn on kitchen lights', entities, policy, {
+				...options,
+				chat: async () =>
+					JSON.stringify({
+						outcome: 'propose_actions',
+						summary: 'Proposed plan: Turn on the example light.',
+						actions: [
+							{
+								entityId: states[1]!.entity_id,
+								action: 'turn_on',
+								reason: 'The request asks for it.',
+								domain: 'light',
+								service: 'turn_on',
+								target: {entity_id: 'switch.example_other'},
+								data: {unexpected: true},
+							},
+						],
+					}),
+			}),
+		).rejects.toThrow();
 	});
 });

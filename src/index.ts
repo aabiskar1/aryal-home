@@ -21,7 +21,7 @@ const main = async (instruction: string): Promise<void> => {
 		maxRequestBytes: env.PLANNING_REQUEST_MAX_BYTES,
 		chat: requestOllamaChat,
 	});
-	const {validatedPlan, selection} = result;
+	const {validatedPlan, selection, executionReadiness} = result;
 
 	console.log('Connected to Home Assistant.');
 	console.log(`Received ${states.length} entities.`);
@@ -38,6 +38,11 @@ const main = async (instruction: string): Promise<void> => {
 	console.log('Deterministically validated proposals:');
 	console.log(JSON.stringify(validatedPlan.actions, undefined, 2));
 	console.log(`Rejected ${validatedPlan.rejectedActions.length} proposed actions.`);
+	console.log(`Execution-readiness outcome: ${executionReadiness.outcome}.`);
+	console.log('Execution-ready commands (prepared only):');
+	console.log(JSON.stringify(executionReadiness.commands, undefined, 2));
+	console.log('Execution-readiness rejections:');
+	console.log(JSON.stringify(executionReadiness.rejectedActions, undefined, 2));
 	console.log('No Home Assistant service calls were made.');
 };
 

@@ -7,7 +7,7 @@
 	"scripts": {
 		"dev": "tsx watch src/index.ts",
 		"start": "node dist/index.js",
-		"build": "tsc -p tsconfig.json",
+		"build": "node --input-type=module -e \"import {rmSync} from 'node:fs'; rmSync('dist', {recursive: true, force: true});\" && tsc -p tsconfig.json",
 		"lint": "xo",
 		"lint:fix": "xo --fix",
 		"format": "prettier --write .",

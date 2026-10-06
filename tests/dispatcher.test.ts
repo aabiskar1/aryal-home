@@ -1,22 +1,21 @@
 import {setTimeout as delay} from 'node:timers/promises';
 import {beforeEach, describe, expect, expectTypeOf, it, vi} from 'vitest';
 import {loadEntityPolicy} from '../src/config/policy.js';
+import {env} from '../src/config/env.js';
+import * as dispatcher from '../src/execution/dispatcher.js';
 import {executeReadyCommands} from '../src/execution/dispatcher.js';
 import {
 	prepareExecutionReadyCommands,
 	type ExecutionReadyCommand,
 } from '../src/execution/readiness.js';
-import {
-	revalidateForDispatch,
-	type DispatchAuthorizedCommand,
-} from '../src/execution/revalidation.js';
+import type {DispatchAuthorizedCommand} from '../src/execution/revalidation.js';
 import type {CanonicalAction} from '../src/home-assistant/capabilities.js';
 import {discoverEntities} from '../src/home-assistant/discovery.js';
 import {getHomeAssistantRegistries} from '../src/home-assistant/registry-client.js';
 import type {HomeAssistantState} from '../src/home-assistant/schemas.js';
-import {callHomeAssistantService} from '../src/home-assistant/service-client.js';
 import {normalizeStates} from '../src/home-assistant/state-normalizer.js';
 import {validatePlan, type ValidatedAction} from '../src/planning/policy.js';
+import {runPlanningPipeline} from '../src/planning/pipeline.js';
 import type {ProposedAction} from '../src/planning/schemas.js';
 import {resolveEntityPolicy} from '../src/policy/resolver.js';
 import type {EntityPolicy} from '../src/policy/schemas.js';
@@ -89,6 +88,7 @@ const confirmation = vi.fn<(entityId: string) => Promise<{statusCode: number; bo
 let events: string[];
 beforeEach(() => {
 	vi.clearAllMocks();
+	env.DRY_RUN = false;
 	freshStates.mockReset().mockResolvedValue([state(), state(other)]);
 	confirmation.mockReset().mockImplementation(async (entityId) => ({
 		statusCode: 200,
@@ -121,45 +121,103 @@ beforeEach(() => {
 });
 
 describe('production dispatch and confirmation', () => {
+	it.each(['nonempty', 'empty'])(
+		'blocks %s execution with DRY_RUN=true before any reads',
+		async (kind) => {
+			env.DRY_RUN = true;
+			const commands = kind === 'nonempty' ? [ready(), ready(other)] : [];
+			const result = await executeReadyCommands(commands);
+
+			expect(result).toEqual({
+				outcome: 'execution_disabled',
+				results: commands.map((_, index) => ({
+					index,
+					outcome: 'execution_disabled',
+					reason: 'dry_run',
+				})),
+			});
+			expect(http.post).not.toHaveBeenCalled();
+			expect(http.get).not.toHaveBeenCalled();
+			expect(confirmation).not.toHaveBeenCalled();
+			expect(freshStates).not.toHaveBeenCalled();
+			expect(getHomeAssistantRegistries).not.toHaveBeenCalled();
+			expect(loadEntityPolicy).not.toHaveBeenCalled();
+		},
+	);
+
+	it('exports only the production execution entry point', () => {
+		expect(Object.keys(dispatcher)).toEqual(['executeReadyCommands']);
+	});
+
+	it.each([true, false])('preserves read-only planning with DRY_RUN=%s', async (dryRun) => {
+		env.DRY_RUN = dryRun;
+		const inventory = discoverEntities([state()], registries([target]));
+		const result = await runPlanningPipeline(
+			`Turn on ${target}`,
+			inventory,
+			resolveEntityPolicy(inventory, policy),
+			{
+				model: 'example-model',
+				maxRequestBytes: 100_000,
+				chat: async () =>
+					JSON.stringify({
+						outcome: 'propose_actions',
+						summary: 'Proposed plan: Turn on the example light.',
+						actions: [{entityId: target, action: 'turn_on', reason: 'Example instruction.'}],
+					}),
+			},
+		);
+
+		expect(result.executionReadiness.outcome).toBe('ready');
+		expect(result.executionReadiness.commands).toEqual([ready()]);
+		expect(http.post).not.toHaveBeenCalled();
+		expect(http.get).not.toHaveBeenCalled();
+		expect(confirmation).not.toHaveBeenCalled();
+	});
+
 	it.each([
 		{entityId: target, domain: 'light', action: 'turn_on' as const, before: 'off', after: 'on'},
 		{entityId: target, domain: 'light', action: 'turn_off' as const, before: 'on', after: 'off'},
 		{entityId: other, domain: 'switch', action: 'turn_on' as const, before: 'off', after: 'on'},
 		{entityId: other, domain: 'switch', action: 'turn_off' as const, before: 'on', after: 'off'},
-	])('confirms $domain $action using an exact service POST and fresh GET', async (example) => {
-		freshStates.mockResolvedValue([state(example.entityId, example.before)]);
-		confirmation.mockResolvedValue({statusCode: 200, body: state(example.entityId, example.after)});
-		const result = await executeReadyCommands([ready(example.entityId, example.action)]);
+	])(
+		'confirms $domain $action with DRY_RUN=false using an exact service POST and fresh GET',
+		async (example) => {
+			expect(env.DRY_RUN).toBe(false);
+			freshStates.mockResolvedValue([state(example.entityId, example.before)]);
+			confirmation.mockResolvedValue({
+				statusCode: 200,
+				body: state(example.entityId, example.after),
+			});
+			const result = await executeReadyCommands([ready(example.entityId, example.action)]);
 
-		expect(result.outcome).toBe('all_confirmed');
-		expect(result.results[0]).toMatchObject({index: 0, outcome: 'confirmed'});
-		expect(http.post).toHaveBeenCalledExactlyOnceWith(
-			`services/${example.domain}/${example.action}`,
-			{
-				json: {entity_id: example.entityId},
+			expect(result.outcome).toBe('all_confirmed');
+			expect(result.results[0]).toMatchObject({index: 0, outcome: 'confirmed'});
+			expect(http.post).toHaveBeenCalledExactlyOnceWith(
+				`services/${example.domain}/${example.action}`,
+				{
+					json: {entity_id: example.entityId},
+					responseType: 'json',
+				},
+			);
+			expect(http.get).toHaveBeenLastCalledWith(`states/${example.entityId}`, {
 				responseType: 'json',
-			},
-		);
-		expect(http.get).toHaveBeenLastCalledWith(`states/${example.entityId}`, {
-			responseType: 'json',
-			timeout: {request: 2000},
-		});
-		expect(events).toEqual([
-			'fresh_authorization',
-			`post:services/${example.domain}/${example.action}`,
-			`confirm:states/${example.entityId}`,
-		]);
-		expect(freshStates).toHaveBeenCalledTimes(1);
-		expect(confirmation).toHaveBeenCalledTimes(1);
-	});
+				timeout: {request: 2000},
+			});
+			expect(events).toEqual([
+				'fresh_authorization',
+				`post:services/${example.domain}/${example.action}`,
+				`confirm:states/${example.entityId}`,
+			]);
+			expect(freshStates).toHaveBeenCalledTimes(1);
+			expect(confirmation).toHaveBeenCalledTimes(1);
+		},
+	);
 
-	it('keeps proposal, readiness, and authorized transport types separate', () => {
+	it('keeps proposal, readiness, and authorization types separate', () => {
 		expectTypeOf<ExecutionReadyCommand>().not.toMatchObjectType<DispatchAuthorizedCommand>();
 		expectTypeOf<ValidatedAction>().not.toMatchObjectType<DispatchAuthorizedCommand>();
 		expectTypeOf<ProposedAction>().not.toMatchObjectType<DispatchAuthorizedCommand>();
-		expectTypeOf<typeof callHomeAssistantService>().parameters.toEqualTypeOf<
-			[command: DispatchAuthorizedCommand]
-		>();
 		expectTypeOf<typeof executeReadyCommands>().parameters.toEqualTypeOf<
 			[commands: readonly ExecutionReadyCommand[]]
 		>();
@@ -406,11 +464,12 @@ describe('production dispatch and confirmation', () => {
 		{data: {brightness: 100}},
 		{reason: 'Model says use a different service'},
 		{target: {entity_id: target, area_id: 'example_area'}},
-	])('rejects forged service input %j even at the internal transport', async (change) => {
-		const validation = await revalidateForDispatch([ready()]);
-		const untrusted = {...validation.commands[0]!, ...change};
-		const command = untrusted as DispatchAuthorizedCommand;
-		await expect(callHomeAssistantService(command)).rejects.toThrow();
+	])('rejects forged service input %j before private transport dispatch', async (change) => {
+		const untrusted = {...ready(), ...change};
+		const command = untrusted as ExecutionReadyCommand;
+		const result = await executeReadyCommands([command]);
+		expect(result.outcome).toBe('no_authorized_commands');
+		expect(result.results[0]).toMatchObject({outcome: 'skipped_not_authorized'});
 		expect(http.post).not.toHaveBeenCalled();
 	});
 });

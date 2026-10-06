@@ -369,7 +369,9 @@ execution API below dispatches immediately, repeats revalidation after deferral,
 `executeReadyCommands(commands)` in `src/execution/dispatcher.ts` is the sole production execution
 entry point. It accepts `readonly ExecutionReadyCommand[]`, runs `revalidateForDispatch()` with its
 production-owned fresh readers, and sends only newly reconstructed `DispatchAuthorizedCommand`
-objects to the private dispatcher. Raw model proposals and planning-time `ValidatedAction` objects
+objects to the private dispatcher. With `DRY_RUN=true`, it returns `execution_disabled` before
+any authorization, service, or confirmation reads; per-input entries have the same outcome with
+reason `dry_run` and no authorized command fields. Raw model proposals and planning-time `ValidatedAction` objects
 cannot enter that dispatcher. No reader, transport, payload, or routing override is accepted.
 
 The initial whole-batch validation preserves duplicate/conflict rejection. Commands execute in input
@@ -379,13 +381,17 @@ because earlier dispatch and confirmation deferred it. Initial rejections remain
 no authorization cache, execution queue, replacement action, rollback, or service-call retry.
 Dispatch authorization is short-lived: any delayed execution requires revalidation again.
 
-The internal `src/home-assistant/service-client.ts` transport independently checks strict command
+The non-exported transport colocated in `src/execution/dispatcher.ts` independently checks strict command
 shape and re-derives routing using the application capability catalogue. The only endpoints reachable
 are `/api/services/light/turn_on`, `/api/services/light/turn_off`,
 `/api/services/switch/turn_on`, and `/api/services/switch/turn_off`. Bodies contain exactly
 `{"entity_id":"<single entity>"}`. No brightness, arbitrary service data, area/device target,
-model reason, request options, or other capability is accepted. Transport helpers are internal
-implementation details; integrations must use `executeReadyCommands()` for current authorization.
+model reason, request options, or other capability is accepted. The transport, HTTP client, confirmation
+reader, and lower dispatcher are private to the module. No transport object, factory, or testing
+bypass is exported; integrations can invoke only `executeReadyCommands()`. The private POST helper
+also checks `DRY_RUN` as a backstop before issuing a request.
+The build clears generated `dist` output before compiling so deleted transport exports cannot survive
+as stale executable files.
 The transport follows the [Home Assistant REST service contract](https://developers.home-assistant.io/docs/api/rest/#post-apiservicesdomainservice)
 and validates the changed-state list response, including an empty list. That response never confirms
 the requested result.
@@ -400,13 +406,15 @@ of polling delay plus three bounded reads. No success is reported from HTTP stat
 
 `ExecutionResult` contains ordered `CommandExecutionResult` entries with original input indices:
 
-| Per-command outcome      | Meaning                                                     |
-| ------------------------ | ----------------------------------------------------------- |
-| `confirmed`              | Fresh target state matches the requested power action       |
-| `dispatch_failed`        | Service request, status, or response validation failed      |
-| `confirmation_failed`    | POST succeeded but fresh state could not confirm the result |
-| `skipped_not_authorized` | Initial or repeated fresh validation rejected the command   |
+| Per-command outcome      | Meaning                                                      |
+| ------------------------ | ------------------------------------------------------------ |
+| `execution_disabled`     | Configuration blocks execution; no authorization or dispatch |
+| `confirmed`              | Fresh target state matches the requested power action        |
+| `dispatch_failed`        | Service request, status, or response validation failed       |
+| `confirmation_failed`    | POST succeeded but fresh state could not confirm the result  |
+| `skipped_not_authorized` | Initial or repeated fresh validation rejected the command    |
 
+Configuration-disabled entries use `dry_run`, separately from policy rejection reasons.
 Dispatch failures use `service_request_failed`. Confirmation failures use `confirmation_read_failed`,
 `target_missing`, `ineligible_state`, or `state_mismatch`; skipped commands retain the existing fresh
 validation reason. Results contain only validated command fields, indices, and reason codes, with
@@ -414,6 +422,7 @@ no transport errors, response bodies, credentials, or registry metadata.
 
 | Batch outcome            | Meaning                                                           |
 | ------------------------ | ----------------------------------------------------------------- |
+| `execution_disabled`     | DRY_RUN blocks execution, including for empty input               |
 | `all_confirmed`          | Every input command was dispatched and confirmed                  |
 | `partial_success`        | At least one confirmed; another failed or was skipped             |
 | `all_failed`             | At least one dispatch attempted, but none confirmed               |
@@ -424,9 +433,12 @@ A failed or timed-out request can still have changed Home Assistant state; failu
 not establish confirmed success. Do not automatically resubmit a failed batch. Confirmation establishes
 Home Assistant's observed state, not permanent state or independent physical-device verification.
 
-The existing planning CLI never imports or invokes execution. `DRY_RUN` does not change its behavior
-and is not an execution switch. Calling the separate execution API is deliberate and makes real
-service calls even if `DRY_RUN=true`; it never substitutes stale validation or simulated success.
+The existing planning CLI never imports or invokes execution and stays read-only for both settings.
+`DRY_RUN` defaults to true and is a global execution backstop: the execution API makes zero service
+POSTs, confirmation reads, or fresh authorization reads while it is true. It reports configuration
+disablement, never simulated authorization or success. With `DRY_RUN=false`, deliberately calling
+`executeReadyCommands()` enables the existing fresh authorization, sequential dispatch, and confirmation
+flow. Disabling DRY_RUN does not make the planning CLI execute.
 
 ## Requirements
 
@@ -480,7 +492,7 @@ PLANNING_REQUEST_MAX_BYTES=24576
 Set `HA_URL`, `HA_TOKEN`, `OLLAMA_URL`, and `OLLAMA_MODEL` for your environment. Adjust
 `PLANNING_REQUEST_MAX_BYTES` if the complete selected request exceeds your local model budget.
 The planning CLI remains read-only regardless of `DRY_RUN`. Service execution requires deliberately
-calling the separate `executeReadyCommands()` API.
+calling the separate `executeReadyCommands()` API with `DRY_RUN=false`.
 
 Create the local entity policy:
 

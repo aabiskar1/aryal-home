@@ -81,6 +81,11 @@ application-owned domain/service/target fields and no service data. Revalidation
 read-only. The separate production `executeReadyCommands()` API revalidates the initial batch, sends
 only newly authorized commands to its private dispatcher, and performs sequential light/switch
 `turn_on`/`turn_off` service POSTs with exactly one `entity_id`. No arbitrary service data is accepted.
+DRY_RUN=true blocks the execution API before any fresh authorization or confirmation reads, returning
+the dedicated execution_disabled outcome and dry_run reason rather than a policy rejection or success.
+Only DRY_RUN=false permits deliberate execution. The raw transport, HTTP client, and confirmation
+helpers are non-exported and colocated with the private dispatcher; there is no direct transport API
+or test bypass. A private POST guard also enforces DRY_RUN before any service request.
 Later eligible commands are revalidated again immediately before their POST, since earlier execution
 and confirmation deferred them. Initial rejections stay rejected; no old authorization is cached or
 queued. Planning-time readiness and earlier authorization are not permanent permission.

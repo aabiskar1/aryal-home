@@ -53,6 +53,7 @@ Do not weaken these requirements without explicit approval:
 - Never claim success unless Home Assistant confirms the action.
 - Never permit autonomous unlocking.
 - Keep critical infrastructure entities denylisted.
+- DRY_RUN=true must prevent every Home Assistant service POST, including through the execution API.
 
 ## Repository and privacy rules
 
@@ -130,5 +131,8 @@ Implemented:
 The planning CLI remains read-only and stops at execution-ready commands. Deliberate execution uses
 `executeReadyCommands()` to freshly authorize commands, dispatch only `DispatchAuthorizedCommand`
 objects, and confirm current Home Assistant target state. Keep the lower-level dispatcher private.
+Service transport and confirmation helpers must remain non-exported within that same module.
+DRY_RUN=true returns execution_disabled before authorization or confirmation reads; DRY_RUN=false
+permits deliberately invoking the execution API. The planning CLI stays read-only in both cases.
 Revalidate later commands after earlier dispatch/confirmation deferral. Do not broaden execution
 beyond light/switch turn_on and turn_off or accept arbitrary service data without explicit scope.

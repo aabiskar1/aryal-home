@@ -216,7 +216,10 @@ describe('selectRelevantContext', () => {
 	it('measures the complete request and never silently truncates an over-budget selection', () => {
 		const instruction = 'Turn off all lights';
 		const states = candidates.slice(0, 4).map((item) => item.state);
-		const exactBytes = planningRequestBytes({instruction, states}, options.model);
+		const exactBytes = planningRequestBytes(
+			{instruction, states, intentMode: 'set_only'},
+			options.model,
+		);
 		const ready = selectRelevantContext(instruction, candidates, {
 			...options,
 			maxRequestBytes: exactBytes + outputHeadroomBytes,

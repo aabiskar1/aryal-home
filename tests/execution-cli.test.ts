@@ -199,7 +199,7 @@ describe('execution CLI orchestration', () => {
 	it('reports partial batch success as unsuccessful exit', async () => {
 		vi.mocked(requestOllamaChat).mockResolvedValue(plan([proposal(), proposal(other)]));
 		http.post.mockResolvedValueOnce({statusCode: 500, body: []});
-		const result = await runExecutionCli('Turn on all lights and switches');
+		const result = await runExecutionCli(`Turn on ${target} and ${other}`);
 		expect(result).toMatchObject({
 			exitCode: 1,
 			outcome: 'partial_success',
@@ -221,7 +221,7 @@ describe('execution CLI orchestration', () => {
 	});
 	it('reports partial success when readiness rejects some proposals', async () => {
 		vi.mocked(requestOllamaChat).mockResolvedValue(plan([proposal(), proposal(), proposal(other)]));
-		const result = await runExecutionCli('Turn on all lights and switches');
+		const result = await runExecutionCli(`Turn on ${target} and ${other}`);
 		expect(result).toMatchObject({
 			exitCode: 1,
 			outcome: 'partial_success',
@@ -329,4 +329,239 @@ describe('execution CLI orchestration', () => {
 		expect(formatExecutionCliResult(result)).not.toContain('RAW_ERROR');
 		expect(formatExecutionCliResult(result)).not.toContain(env.HA_TOKEN);
 	});
+});
+
+const extra = 'light.example_z_target';
+const collectionInstruction = 'Turn on all Example Room lights';
+const collectionPlan = () =>
+	JSON.stringify({
+		outcome: 'propose_actions',
+		summary: 'Proposed plan: Turn on the complete permitted light set.',
+		actions: [
+			{
+				type: 'set_action',
+				action: 'turn_on',
+				scope: {area: 'Example Room', domain: 'light'},
+				reason: 'RAW_SET_REASON must not be printed.',
+			},
+		],
+	});
+const configureCollection = (extraState = 'off') => {
+	vi.mocked(getHomeAssistantStates).mockResolvedValue([
+		state(),
+		state(extra, extraState),
+		state(other),
+	]);
+	vi.mocked(getHomeAssistantRegistries).mockResolvedValue({
+		status: 'available',
+		entities: [target, extra, other].map((entityId) => ({
+			entity_id: entityId,
+			device_id: null,
+			area_id: 'example_area',
+			labels: [],
+			disabled_by: null,
+		})),
+		devices: [],
+		areas: [
+			{area_id: 'example_area', name: 'Example Room', aliases: ['Example Alias'], labels: []},
+		],
+		labels: [],
+	});
+	vi.mocked(requestOllamaChat).mockResolvedValue(collectionPlan());
+};
+
+describe('set expansion execution and diagnostics', () => {
+	it('executes expanded commands through fresh authorization and confirmation, with sanitized diagnostics', async () => {
+		configureCollection();
+		const result = await runExecutionCli(collectionInstruction);
+		expect(result).toMatchObject({exitCode: 0, outcome: 'all_confirmed'});
+		expect(result.planning?.intentExpansion.sets[0]).toMatchObject({
+			intentType: 'set_action',
+			matchedCount: 2,
+			expandedActions: [
+				{entityId: target, action: 'turn_on'},
+				{entityId: extra, action: 'turn_on'},
+			],
+		});
+		expect(executionSpy).toHaveBeenCalledExactlyOnceWith(result.readiness?.commands);
+		expect(getHomeAssistantStates).toHaveBeenCalledTimes(3);
+		expect(loadEntityPolicy).toHaveBeenCalledTimes(3);
+		expect(http.post).toHaveBeenCalledTimes(2);
+		expect(http.post.mock.calls).toEqual([
+			['services/light/turn_on', {json: {entity_id: target}, responseType: 'json'}],
+			['services/light/turn_on', {json: {entity_id: extra}, responseType: 'json'}],
+		]);
+		expect(http.get).toHaveBeenCalledTimes(2);
+		const output = formatExecutionCliResult(result);
+		expect(output).not.toContain('RAW_SET_REASON');
+		expect(output).not.toContain('example_area');
+		expect(output).not.toContain('example_device');
+	});
+
+	it('honors DRY_RUN for every expanded member before fresh reads or any POST', async () => {
+		configureCollection();
+		env.DRY_RUN = true;
+		const result = await runExecutionCli(collectionInstruction);
+		expect(result).toMatchObject({exitCode: 3, outcome: 'execution_disabled'});
+		expect(result.readiness?.commands).toHaveLength(2);
+		expect(http.post).not.toHaveBeenCalled();
+		expect(http.get).not.toHaveBeenCalled();
+		expect(getHomeAssistantStates).toHaveBeenCalledTimes(1);
+	});
+
+	it('allows set no-ops without dropping remaining executable members or implying partial failure', async () => {
+		configureCollection('on');
+		const result = await runExecutionCli(collectionInstruction);
+		expect(result).toMatchObject({exitCode: 0, outcome: 'all_confirmed'});
+		expect(result.planning?.intentExpansion.satisfiedCount).toBe(1);
+		expect(result.readiness?.rejectedActions).toEqual([
+			{entityId: extra, action: 'turn_on', reason: 'no_op'},
+		]);
+		expect(http.post).toHaveBeenCalledTimes(1);
+	});
+
+	it('reports an already-satisfied set without dispatch or claiming executed success', async () => {
+		configureCollection('on');
+		vi.mocked(getHomeAssistantStates).mockResolvedValue([state(target, 'on'), state(extra, 'on')]);
+		const result = await runExecutionCli(collectionInstruction);
+		expect(result).toMatchObject({exitCode: 0, outcome: 'no_action'});
+		expect(result.planning?.intentExpansion.satisfiedCount).toBe(2);
+		expect(executionSpy).not.toHaveBeenCalled();
+		expect(http.post).not.toHaveBeenCalled();
+	});
+
+	it('does not call a set complete when only no-ops and excluded members remain', async () => {
+		configureCollection('unavailable');
+		vi.mocked(getHomeAssistantStates).mockResolvedValue([
+			state(target, 'on'),
+			state(extra, 'unavailable'),
+		]);
+		const result = await runExecutionCli(collectionInstruction);
+		expect(result).toMatchObject({exitCode: 1, outcome: 'rejected'});
+		expect(result.planning?.intentExpansion).toMatchObject({
+			outcome: 'partial',
+			satisfiedCount: 1,
+			unprocessedCount: 1,
+		});
+		expect(executionSpy).not.toHaveBeenCalled();
+	});
+
+	it.each(['unavailable', 'denied'])(
+		'shows %s exclusions as partial processing even when all ready commands confirm',
+		async (condition) => {
+			configureCollection(condition === 'unavailable' ? 'unavailable' : 'off');
+			if (condition === 'denied') {
+				vi.mocked(loadEntityPolicy).mockResolvedValue({
+					version: 1,
+					allow: [{domain: 'light'}],
+					deny: [{entityId: extra}],
+				});
+			}
+
+			const result = await runExecutionCli(collectionInstruction);
+			expect(result).toMatchObject({
+				exitCode: 1,
+				outcome: 'partial_success',
+				execution: {outcome: 'all_confirmed'},
+			});
+			expect(result.planning?.intentExpansion).toMatchObject({
+				outcome: 'partial',
+				unprocessedCount: 1,
+			});
+			expect(result.readiness?.commands).toHaveLength(1);
+			expect(http.post).toHaveBeenCalledTimes(1);
+		},
+	);
+
+	it('removes an expanded member when policy changes before dispatch', async () => {
+		configureCollection();
+		vi.mocked(loadEntityPolicy)
+			.mockResolvedValueOnce({version: 1, allow: [{domain: 'light'}], deny: []})
+			.mockResolvedValue({version: 1, allow: [{domain: 'light'}], deny: [{entityId: extra}]});
+		const result = await runExecutionCli(collectionInstruction);
+		expect(result.readiness?.commands).toHaveLength(2);
+		expect(result).toMatchObject({exitCode: 1, outcome: 'partial_success'});
+		expect(result.execution?.results[1]).toMatchObject({
+			outcome: 'skipped_not_authorized',
+			reason: 'denied',
+		});
+		expect(http.post).toHaveBeenCalledTimes(1);
+		expect(http.post).toHaveBeenCalledWith(
+			'services/light/turn_on',
+			expect.objectContaining({json: {entity_id: target}}),
+		);
+	});
+
+	it('reauthorizes later expanded members after earlier confirmation deferral', async () => {
+		configureCollection();
+		http.get.mockImplementation(async (path: string) => {
+			vi.mocked(loadEntityPolicy).mockResolvedValue({
+				version: 1,
+				allow: [{domain: 'light'}],
+				deny: [{entityId: extra}],
+			});
+			return {statusCode: 200, body: state(path.slice('states/'.length), 'on')};
+		});
+		const result = await runExecutionCli(collectionInstruction);
+		expect(result).toMatchObject({exitCode: 1, outcome: 'partial_success'});
+		expect(result.execution?.results[1]).toMatchObject({
+			outcome: 'skipped_not_authorized',
+			reason: 'denied',
+		});
+		expect(http.post).toHaveBeenCalledTimes(1);
+		expect(getHomeAssistantStates).toHaveBeenCalledTimes(3);
+	});
+
+	it('fails closed for an individual subset of an all request', async () => {
+		configureCollection();
+		vi.mocked(requestOllamaChat).mockResolvedValue(plan());
+		const result = await runExecutionCli(collectionInstruction);
+		expect(result).toMatchObject({exitCode: 1, outcome: 'insufficient_context'});
+		expect(result.planning?.intentExpansion.rejectedIntents[0]?.reason).toBe('set_intent_required');
+		expect(executionSpy).not.toHaveBeenCalled();
+		expect(http.post).not.toHaveBeenCalled();
+	});
+});
+
+describe('contextual subset execution boundary', () => {
+	it.each([target, extra])(
+		'rejects arbitrary %s from the same contextual collection before executing anything',
+		async (entityId) => {
+			configureCollection();
+			vi.mocked(getHomeAssistantStates).mockResolvedValue([
+				state(target, 'on'),
+				state(extra, 'on'),
+				state(other, 'on'),
+			]);
+			vi.mocked(requestOllamaChat).mockResolvedValue(
+				JSON.stringify({
+					outcome: 'propose_actions',
+					summary: 'Proposed plan: RAW_CONTEXTUAL_SUMMARY',
+					actions: [{entityId, action: 'turn_off', reason: 'RAW_CONTEXTUAL_REASON'}],
+				}),
+			);
+			const result = await runExecutionCli('Example Room is empty and the lights are still on');
+			expect(result).toMatchObject({exitCode: 1, outcome: 'insufficient_context'});
+			expect(result.planning?.selection).toMatchObject({
+				intentMode: 'mixed',
+				reason: 'area_domain',
+			});
+			expect(result.planning?.intentExpansion.rejectedIntents).toEqual([
+				{
+					intentIndex: 0,
+					intentType: 'entity_action',
+					reason: 'contextual_subset_requires_set_intent',
+				},
+			]);
+			expect(result.readiness?.commands).toEqual([]);
+			expect(executionSpy).not.toHaveBeenCalled();
+			expect(http.post).not.toHaveBeenCalled();
+			expect(http.get).not.toHaveBeenCalled();
+			expect(getHomeAssistantStates).toHaveBeenCalledTimes(1);
+			const output = formatExecutionCliResult(result);
+			expect(output).toContain('contextual_subset_requires_set_intent');
+			expect(output).not.toContain('RAW_CONTEXTUAL_SUMMARY');
+			expect(output).not.toContain('RAW_CONTEXTUAL_REASON');
+		},
+	);
 });

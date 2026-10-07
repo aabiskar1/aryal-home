@@ -128,6 +128,8 @@ Implemented:
 - Fresh pre-dispatch policy/state revalidation with production-owned readers
 - Separate sequential light/switch turn_on/turn_off dispatch API with fresh state confirmation
 - Separate instruction-only execution CLI using the existing planning pipeline and execution API
+- Semantic area/domain set intents with deterministic complete permitted-set expansion, shared
+  post-model validation/readiness, and sanitized expansion diagnostics
 
 The planning CLI remains read-only and stops at execution-ready commands. Deliberate execution uses
 `executeReadyCommands()` to freshly authorize commands, dispatch only `DispatchAuthorizedCommand`
@@ -149,3 +151,17 @@ CLI exit codes: 0 for all-confirmed with no earlier rejections or valid model no
 partial/rejected/insufficient-context/failed/error outcomes; 2 for invalid input; 3 for execution_disabled.
 Never print raw exceptions, credentials, registry inventory, or untrusted model summary/reason prose
 from the execution CLI. Partial success must remain visible and must not exit as complete success.
+
+`Plan.actions` accepts existing concrete entity proposals or strict `set_action` intents using a
+validated effective area name/alias, supported domain, and canonical action. Expand only complete
+permitted scopes shown in model context; reject ambiguous, unknown, missing, or incomplete scopes.
+Expanded `ConcretePlan` members must pass the existing policy/readiness pipeline. Set no-ops are
+already satisfied; ineligible/non-permitted exclusions and material rejections keep outcomes partial.
+Keep explicit entity targets single-target and explicit all/every requests from silently accepting
+individual subsets. No labels/whole-home set scopes or batch confirmation thresholds are implemented.
+
+Without an explicit entity-ID/friendly-name targeting signal, reject individual proposals belonging
+to a relevant permitted area/domain scope with more than one member as
+`contextual_subset_requires_set_intent`. Do not infer or convert to all: the model must return a proper
+set intent or insufficient context. Non-universal scopes with one permitted member may use an entity
+proposal; explicit universal requests still require set intents regardless of member count.

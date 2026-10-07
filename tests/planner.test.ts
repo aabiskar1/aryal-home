@@ -110,7 +110,7 @@ describe('createPlan', () => {
 		);
 
 		expect(plan.actions).toHaveLength(1);
-		expect(plan.actions[0]?.entityId).toBe('light.example_light');
+		expect(plan.actions[0]).toMatchObject({entityId: 'light.example_light'});
 		expect(requests[0]?.format).toBeDefined();
 
 		const userMessage = requests[0]?.messages.find((message) => message.role === 'user');
@@ -255,7 +255,18 @@ describe('createPlan', () => {
 						summary: {pattern: '^Proposed plan:.*'},
 						actions: {
 							minItems: 1,
-							items: {properties: {action: {enum: ['turn_on', 'turn_off']}}},
+							items: {
+								anyOf: [
+									{
+										properties: {
+											type: {const: 'set_action'},
+											action: {enum: ['turn_on', 'turn_off']},
+											scope: {additionalProperties: false},
+										},
+									},
+									{properties: {action: {enum: ['turn_on', 'turn_off']}}},
+								],
+							},
 						},
 					},
 				},

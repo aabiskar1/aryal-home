@@ -28,21 +28,38 @@ const main = async (instruction: string): Promise<void> => {
 	console.log(`Discovered ${discoveredEntities.length} entities.`);
 	console.log(`Resolved ${result.permittedCount} allowed entities.`);
 	console.log('Selection diagnostics:', selectionDiagnostic(selection, result.permittedCount));
+	console.log('Semantic set expansion diagnostics:');
+	console.log(JSON.stringify(result.intentExpansion, undefined, 2));
 	console.log(`Validated plan outcome: ${validatedPlan.outcome}.`);
-	console.log(
-		selection.kind === 'ready'
-			? 'Model plan summary (untrusted descriptive text):'
-			: 'Deterministic planning summary:',
-	);
-	console.log(validatedPlan.summary);
 	console.log('Deterministically validated proposals:');
-	console.log(JSON.stringify(validatedPlan.actions, undefined, 2));
+	console.log(
+		JSON.stringify(
+			validatedPlan.actions.map(({entityId, action, domain, service}) => ({
+				entityId,
+				action,
+				domain,
+				service,
+			})),
+			undefined,
+			2,
+		),
+	);
 	console.log(`Rejected ${validatedPlan.rejectedActions.length} proposed actions.`);
 	console.log(`Execution-readiness outcome: ${executionReadiness.outcome}.`);
 	console.log('Execution-ready commands (prepared only):');
 	console.log(JSON.stringify(executionReadiness.commands, undefined, 2));
 	console.log('Execution-readiness rejections:');
-	console.log(JSON.stringify(executionReadiness.rejectedActions, undefined, 2));
+	console.log(
+		JSON.stringify(
+			executionReadiness.rejectedActions.map(({action, reason}) => ({
+				entityId: action.entityId,
+				action: action.action,
+				reason,
+			})),
+			undefined,
+			2,
+		),
+	);
 	console.log('No Home Assistant service calls were made.');
 };
 

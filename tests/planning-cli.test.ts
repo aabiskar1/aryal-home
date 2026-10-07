@@ -26,49 +26,66 @@ vi.mock('../src/execution/dispatcher.js', () => {
 afterEach(() => vi.restoreAllMocks());
 
 describe('planning-only CLI boundary', () => {
-	it.each([true, false])(
-		'does not import or invoke execution with DRY_RUN=%s',
-		async (dryRun) => {
+	it.each([
+		{dryRun: true, isSet: false},
+		{dryRun: false, isSet: false},
+		{dryRun: true, isSet: true},
+		{dryRun: false, isSet: true},
+	])(
+		'does not import or invoke execution with DRY_RUN=$dryRun and isSet=$isSet',
+		async ({dryRun, isSet}) => {
 			vi.resetModules();
 			vi.clearAllMocks();
 			fixture.env.DRY_RUN = dryRun;
-			fixture.states.mockResolvedValue([
-				{
-					entity_id: 'light.example_target',
+			const entityIds = isSet
+				? ['light.example_target', 'light.example_second']
+				: ['light.example_target'];
+			fixture.states.mockResolvedValue(
+				entityIds.map((entityId) => ({
+					entity_id: entityId,
 					state: 'off',
 					attributes: {friendly_name: 'Example Lamp'},
 					last_changed: '2026-10-07T00:00:00+00:00',
 					last_updated: '2026-10-07T00:00:00+00:00',
-				},
-			]);
+				})),
+			);
 			fixture.registries.mockResolvedValue({
 				status: 'available',
-				entities: [
-					{
-						entity_id: 'light.example_target',
-						device_id: null,
-						area_id: null,
-						labels: [],
-						disabled_by: null,
-					},
-				],
+				entities: entityIds.map((entityId) => ({
+					entity_id: entityId,
+					device_id: null,
+					area_id: 'example_area',
+					labels: [],
+					disabled_by: null,
+				})),
 				devices: [],
-				areas: [],
+				areas: [{area_id: 'example_area', name: 'Example Area', aliases: [], labels: []}],
 				labels: [],
 			});
 			fixture.policy.mockResolvedValue({version: 1, allow: [{domain: 'light'}], deny: []});
 			fixture.chat.mockResolvedValue(
 				JSON.stringify({
 					outcome: 'propose_actions',
-					summary: 'Proposed plan: Turn on the example lamp.',
-					actions: [
-						{entityId: 'light.example_target', action: 'turn_on', reason: 'Example request.'},
-					],
+					summary: 'Proposed plan: RAW_MODEL_SUMMARY.',
+					actions: isSet
+						? [
+								{
+									type: 'set_action',
+									action: 'turn_on',
+									scope: {area: 'Example Area', domain: 'light'},
+									reason: 'RAW_MODEL_REASON',
+								},
+							]
+						: [{entityId: 'light.example_target', action: 'turn_on', reason: 'RAW_MODEL_REASON'}],
 				}),
 			);
 			const log = vi.spyOn(console, 'log').mockImplementation(() => undefined);
 			const previousArgv = process.argv;
-			process.argv = ['node', 'index.js', 'Turn on Example Lamp'];
+			process.argv = [
+				'node',
+				'index.js',
+				isSet ? 'Turn on all Example Area lights' : 'Turn on Example Lamp',
+			];
 			try {
 				await import('../src/index.js');
 			} finally {
@@ -78,6 +95,14 @@ describe('planning-only CLI boundary', () => {
 			expect(fixture.states).toHaveBeenCalledTimes(1);
 			expect(fixture.chat).toHaveBeenCalledTimes(1);
 			expect(log).toHaveBeenCalledWith('Execution-ready commands (prepared only):');
+			expect(log).toHaveBeenCalledWith('Semantic set expansion diagnostics:');
+			expect(JSON.stringify(log.mock.calls)).not.toContain('RAW_MODEL_SUMMARY');
+			expect(JSON.stringify(log.mock.calls)).not.toContain('RAW_MODEL_REASON');
+			if (isSet) {
+				expect(JSON.stringify(log.mock.calls)).toContain('matchedCount');
+				expect(JSON.stringify(log.mock.calls)).toContain('set_action');
+			}
+
 			expect(log).toHaveBeenLastCalledWith('No Home Assistant service calls were made.');
 		},
 		20_000,

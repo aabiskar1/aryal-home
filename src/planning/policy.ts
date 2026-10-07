@@ -1,7 +1,7 @@
 import {getDomainFromEntityId} from '../home-assistant/discovery.js';
 import {resolveAction, type ResolvedAction} from '../home-assistant/capabilities.js';
 import type {ResolvedEntityPolicy} from '../policy/resolver.js';
-import type {Plan, PlanOutcome, ProposedAction} from './schemas.js';
+import type {ConcretePlan, PlanOutcome, ProposedAction} from './schemas.js';
 
 export type RejectionReason = 'denied' | 'not_allowed' | 'not_in_context' | 'unsupported_action';
 
@@ -21,7 +21,7 @@ export type PlanValidationResult = {
 };
 
 export const validatePlan = (
-	plan: Plan,
+	plan: ConcretePlan,
 	policy: ResolvedEntityPolicy,
 	contextEntityIds: ReadonlySet<string>,
 ): PlanValidationResult => {

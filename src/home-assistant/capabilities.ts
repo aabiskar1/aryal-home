@@ -1,4 +1,5 @@
 export const canonicalActions = ['turn_on', 'turn_off'] as const;
+export const supportedDomains = ['light', 'switch'] as const;
 
 export type CanonicalAction = (typeof canonicalActions)[number];
 export type HomeAssistantService = 'turn_on' | 'turn_off';
@@ -12,7 +13,10 @@ const domainActionServices = {
 		turn_on: 'turn_on',
 		turn_off: 'turn_off',
 	},
-} as const satisfies Record<string, Partial<Record<CanonicalAction, HomeAssistantService>>>;
+} as const satisfies Record<
+	(typeof supportedDomains)[number],
+	Partial<Record<CanonicalAction, HomeAssistantService>>
+>;
 
 type SupportedDomain = keyof typeof domainActionServices;
 

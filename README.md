@@ -16,9 +16,10 @@ reason about contextual information, and propose actions within explicitly defin
 boundaries.
 
 Home Assistant remains the source of truth. The model receives only explicitly permitted,
-normalized state and produces structured proposed actions that are schema-validated and checked
-against deterministic entity policy. Application code checks execution readiness and constructs
-minimal service commands from accepted proposals using the planning snapshot.
+normalized state and produces structured entity or set intents. Application code expands validated
+area/domain scopes into every permitted matching entity, then checks deterministic entity policy
+and execution readiness. It constructs minimal service commands from accepted proposals using the
+planning snapshot.
 
 > **Status:** Early development. The planning CLI remains read-only. A separate deliberate execution
 > API can control policy-approved lights and switches with fresh authorization and state confirmation.
@@ -53,7 +54,8 @@ flowchart TD
     Q --> O[Local Ollama model]
     I --> O
     O --> S[Validate structured plan with Zod]
-    S --> PV[Validate full policy, selected context and capabilities]
+    S --> SI[Resolve semantic scopes and expand complete permitted sets]
+    SI --> PV[Validate full policy, selected context and capabilities]
     PV --> ER[Reject duplicates, conflicts and snapshot no-ops]
     ER --> CMD[Construct application-owned execution-ready commands]
     CMD --> C[Read-only CLI output and STOP]
@@ -223,9 +225,11 @@ consistency rules:
 - Every proposed action is exactly `turn_on` or `turn_off`; aliases such as `off` and qualified
   services such as `light.turn_off` are rejected.
 
-The model does not provide a domain, service name, or service data. After entity-policy checks, the
-application derives the domain from the entity ID and resolves the action through its deterministic
-capability catalogue. These validated proposals remain planning-only; execution requires the
+The model may instead propose a strict `set_action` with a semantic area and supported domain; see
+[deterministic set intents](docs/set-intents.md). It never provides service names or service data.
+After expansion and entity-policy checks, the application derives routing from the entity ID and
+resolves the action through its deterministic capability catalogue. These validated proposals remain
+planning-only; execution requires the
 separate readiness, fresh authorization, and dispatch boundaries.
 
 ## Execution readiness
@@ -233,7 +237,8 @@ separate readiness, fresh authorization, and dispatch boundaries.
 The representations have separate responsibilities:
 
 - **Model proposal (`ProposedAction`):** untrusted `entityId`, canonical `action`, and descriptive
-  `reason`, validated by the structured plan schema.
+  `reason`, validated by the structured plan schema. `Plan.actions` also accepts `SetAction` semantic
+  intents. Expansion produces a `ConcretePlan` of `ProposedAction` members before policy validation.
 - **Planning-time validated proposal (`ValidatedAction`):** a proposal that passed full-policy,
   exact-context, and capability checks, with an application-derived domain and service. It remains
   planning-only.
@@ -531,8 +536,8 @@ node --env-file=.env dist/index.js \
 ```
 
 The CLI reports the number of received, discovered, and allowed entities; aggregate selection
-diagnostics; the planning outcome and untrusted summary; planning-accepted proposals and rejection
-counts; the separate execution-readiness outcome, prepared commands, and readiness rejections;
+diagnostics; semantic set expansion and member decisions; the planning outcome; planning-accepted
+proposals and rejection counts; the separate execution-readiness outcome, prepared commands, and readiness rejections;
 and this final confirmation:
 
 ```text
@@ -589,7 +594,11 @@ contain intentionally displayed local entity IDs and must be treated as installa
 | `3`       | Ready commands exist but execution is disabled by DRY_RUN                                                                              |
 
 The CLI skips execution for valid no-action plans, insufficient context, or zero readiness commands.
-Post-model validation can label an entirely rejected plan `no_action`; the CLI checks rejection
+Set no-ops are reported as already satisfied and do not make otherwise confirmed sets partial.
+Unavailable or non-permitted scope members, rejected scopes, and material validation/readiness
+rejections make processing incomplete. An entirely already-satisfied set returns `no_action` without
+dispatch; single-entity no-op handling remains unchanged. Post-model validation can label an entirely
+rejected plan `no_action`; the CLI checks rejection
 diagnostics and reports `rejected` with exit 1 in that case. No-action and rejection therefore remain
 distinct. Mixed earlier rejections plus confirmed remaining commands produce CLI `partial_success`
 and exit 1 while preserving the underlying execution result. No replacement actions are invented.

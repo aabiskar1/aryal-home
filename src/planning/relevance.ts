@@ -1,5 +1,7 @@
 import type {NormalizedEntityState} from '../home-assistant/state-normalizer.js';
 import {planningRequestBytes} from './planner.js';
+import type {SetScopeContext} from './intents.js';
+import type {PlanningIntentMode} from './schemas.js';
 
 export type RelevanceCandidate = {
 	state: NormalizedEntityState;
@@ -14,6 +16,9 @@ export type SelectionResult =
 			mode: 'targeted' | 'broad' | 'fallback';
 			reasons: readonly string[];
 			requestBytes: number;
+			setScopes: SetScopeContext[];
+			requiresSetIntent: boolean;
+			intentMode: PlanningIntentMode;
 	  }
 	| {
 			kind: 'insufficient_context';
@@ -23,6 +28,7 @@ export type SelectionResult =
 export type SelectionOptions = {
 	model: string;
 	maxRequestBytes: number;
+	getSetScopes?: (entityIds: ReadonlySet<string>) => SetScopeContext[];
 };
 
 export const outputHeadroomBytes = 4096;
@@ -81,6 +87,22 @@ const hasPhrase = (instruction: string, phrase: string): boolean => {
 
 const hasAnyPhrase = (instruction: string, phrases: readonly string[]): boolean =>
 	phrases.some((phrase) => hasPhrase(instruction, phrase));
+
+// A universal word inside an installation's area name is metadata, not a scope quantifier.
+const hasBroadScope = (instruction: string, candidates: RelevanceCandidate[]): boolean => {
+	const areaPhrases = candidates
+		.flatMap((candidate) => [candidate.state.area, ...candidate.areaAliases])
+		.filter((name) => name !== undefined)
+		.map((name) => normalize(name))
+		.filter((name) => name.length > 0)
+		.toSorted((a, b) => b.length - a.length);
+	let remaining = ` ${normalize(instruction)} `;
+	for (const phrase of areaPhrases) {
+		remaining = remaining.replaceAll(` ${phrase} `, ' ');
+	}
+
+	return hasAnyPhrase(remaining, broadTerms);
+};
 
 type AreaMatch = {
 	candidate: RelevanceCandidate;
@@ -215,7 +237,7 @@ const chooseCandidates = (
 
 	const normalizedInstruction = normalize(instruction);
 	const areas = areaCandidates(normalizedInstruction, candidates);
-	const isBroad = hasAnyPhrase(normalizedInstruction, broadTerms);
+	const isBroad = hasBroadScope(normalizedInstruction, candidates);
 	const exactNames = candidates.filter(
 		(candidate) =>
 			candidate.state.name !== undefined && hasPhrase(normalizedInstruction, candidate.state.name),
@@ -237,19 +259,22 @@ const chooseCandidates = (
 		return {selected: exactNames, mode: 'targeted', reason: 'friendly_name'};
 	}
 
+	const domains = Object.entries(domainTerms)
+		.filter(([, terms]) => hasAnyPhrase(normalizedInstruction, terms))
+		.map(([domain]) => domain);
+
 	if (profile !== undefined) {
 		const scope = areas.length > 0 ? areas : candidates;
 
 		return {
-			selected: scope.filter((candidate) => isObservationMatch(candidate, profile)),
+			selected: scope.filter(
+				(candidate) =>
+					isObservationMatch(candidate, profile) || domains.includes(candidate.state.domain),
+			),
 			mode: 'targeted',
 			reason: `observation_${profile}`,
 		};
 	}
-
-	const domains = Object.entries(domainTerms)
-		.filter(([, terms]) => hasAnyPhrase(normalizedInstruction, terms))
-		.map(([domain]) => domain);
 
 	if (areas.length > 0) {
 		const scoped =
@@ -299,7 +324,18 @@ export const selectRelevantContext = (
 	}
 
 	const states = choice.selected.map((candidate) => candidate.state);
-	const requestBytes = planningRequestBytes({instruction, states}, options.model);
+	const contextEntityIds = new Set(states.map((state) => state.entityId));
+	const scopeCatalogue = options.getSetScopes?.(contextEntityIds) ?? [];
+	const isSingleTarget = choice.reason === 'exact_entity' || choice.reason === 'friendly_name';
+	const requiresSetIntent =
+		!isSingleTarget &&
+		hasBroadScope(instruction, candidates) &&
+		Object.values(domainTerms).some((terms) => hasAnyPhrase(normalize(instruction), terms));
+	const intentMode = isSingleTarget ? 'entity_only' : requiresSetIntent ? 'set_only' : 'mixed';
+	const requestBytes = planningRequestBytes(
+		{instruction, states, setScopes: scopeCatalogue, intentMode},
+		options.model,
+	);
 	if (requestBytes + outputHeadroomBytes > options.maxRequestBytes) {
 		return {kind: 'insufficient_context', reason: 'over_budget'};
 	}
@@ -307,10 +343,13 @@ export const selectRelevantContext = (
 	return {
 		kind: 'ready',
 		states,
-		contextEntityIds: new Set(states.map((state) => state.entityId)),
+		contextEntityIds,
 		mode: choice.mode,
 		reasons: [choice.reason],
 		requestBytes,
+		setScopes: scopeCatalogue,
+		requiresSetIntent,
+		intentMode,
 	};
 };
 

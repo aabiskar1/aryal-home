@@ -15,6 +15,7 @@ const targetDiagnostic = (entityId: string) =>
 const planningDiagnostics = (plan: PlanningPipelineResult) => ({
 	selection: selectionDiagnostic(plan.selection, plan.permittedCount),
 	outcome: plan.validatedPlan.outcome,
+	intentExpansion: plan.intentExpansion,
 	actions: plan.validatedPlan.actions.map(({entityId, action, domain, service}) => ({
 		entityId,
 		action,
@@ -96,13 +97,16 @@ export const runExecutionCli = async (instruction: string): Promise<ExecutionCli
 			return {...base, exitCode: 1, outcome: 'insufficient_context'};
 		}
 
-		const rejectedCount =
-			plan.validatedPlan.rejectedActions.length + plan.executionReadiness.rejectedActions.length;
+		const rejectedCount = plan.intentExpansion.unprocessedCount;
 		if (plan.validatedPlan.outcome === 'no_action' && rejectedCount === 0) {
 			return {...base, exitCode: 0, outcome: 'no_action'};
 		}
 
 		if (plan.executionReadiness.commands.length === 0) {
+			if (rejectedCount === 0 && plan.intentExpansion.satisfiedCount > 0) {
+				return {...base, exitCode: 0, outcome: 'no_action'};
+			}
+
 			return {...base, exitCode: 1, outcome: 'rejected', reason: 'no_execution_ready_commands'};
 		}
 

@@ -103,6 +103,7 @@ selected entity. Relevance selection runs only after policy resolution and never
 - Independent read-only pre-dispatch revalidation against freshly retrieved state, registries, and
   current policy, producing distinct dispatch-authorized commands.
 - Read-only planning from a command-line instruction.
+- Separate natural-language execution CLI that reuses planning and the production execution API.
 - Separate deliberate execution API for sequential light/switch power services with bounded fresh
   confirmation reads, explicit partial results, and no automatic service retries.
 
@@ -505,6 +506,15 @@ Review the policy carefully before running the planner. Both `.env` and
 
 ## Running
 
+### Planning only
+
+With environment variables configured, the existing command remains read-only:
+
+```sh
+npm run build
+npm start -- "Turn off the example lamp"
+```
+
 Run the TypeScript entrypoint directly with an explicit planning instruction:
 
 ```sh
@@ -530,6 +540,67 @@ No Home Assistant service calls were made.
 ```
 
 Output may contain local entity information, so treat terminal logs as installation-sensitive.
+
+### Deliberate execution
+
+Build first, then use the separate execution command:
+
+```sh
+npm run build
+npm run execute -- "Turn off the example lamp"
+```
+
+The execute script loads `.env` if present; exported environment variables take precedence. Keep
+`DRY_RUN=true` (the default) to inspect planning without Home Assistant service POSTs:
+
+```sh
+DRY_RUN=true npm run execute -- "Turn on the example lamp"
+```
+
+Set `DRY_RUN=false` only when deliberately enabling real execution. The existing `npm start` planning
+command stays read-only for either setting; it uses environment variables or the explicit
+`node --env-file=.env dist/index.js` form above. No execution mode or flags were added to that command.
+
+The execution CLI accepts a natural-language instruction only, joined from its arguments. Routing
+flags such as `--domain`, `--service`, and `--target`, and JSON service payloads are rejected. Users
+cannot provide service data or route around the planner. Capability scope remains exactly
+light/switch `turn_on` and `turn_off`.
+
+`src/execute.ts` is a thin wrapper around `runExecutionCli()` in `src/cli/execution.ts`. The workflow
+retrieves current states and registries, loads policy, discovers/enriches entities, resolves the full
+policy, and calls `runPlanningPipeline()`. Only resulting `ExecutionReadyCommand` values enter
+`executeReadyCommands()`, which retains the internal global DRY_RUN backstop, fresh pre-dispatch
+policy/state/registry checks, sequential service dispatch, and fresh target-state confirmation.
+AI proposes; deterministic application code authorizes and executes. No lower transport is exposed.
+
+Output is pretty-printed structured JSON: instruction, aggregate selection diagnostics, validated
+planning outcome/actions/rejections, readiness outcome/commands/rejections, execution outcome, and
+ordered per-command results. A confirmed result identifies the entity, canonical power service,
+and confirmation status. Rejected/skipped entries include entity IDs where available and reason codes.
+Untrusted model summary/reason prose, registry inventory, and raw exceptions/response bodies are
+omitted. The configured HA token is redacted even if it appears in instruction text. Logs still
+contain intentionally displayed local entity IDs and must be treated as installation-sensitive.
+
+| Exit code | Meaning                                                                                                                                |
+| --------- | -------------------------------------------------------------------------------------------------------------------------------------- |
+| `0`       | Every executable command confirmed with no earlier proposal rejections, or valid model `no_action`                                     |
+| `1`       | Partial success, rejected proposals, insufficient context, no authorized commands, execution/confirmation failure, or unexpected error |
+| `2`       | Empty instruction, routing flags, or structured service input                                                                          |
+| `3`       | Ready commands exist but execution is disabled by DRY_RUN                                                                              |
+
+The CLI skips execution for valid no-action plans, insufficient context, or zero readiness commands.
+Post-model validation can label an entirely rejected plan `no_action`; the CLI checks rejection
+diagnostics and reports `rejected` with exit 1 in that case. No-action and rejection therefore remain
+distinct. Mixed earlier rejections plus confirmed remaining commands produce CLI `partial_success`
+and exit 1 while preserving the underlying execution result. No replacement actions are invented.
+
+DRY_RUN may still retrieve planning context and invoke Ollama. When ready commands exist, the
+execution API returns `execution_disabled`; the CLI explicitly says configuration blocked execution
+and exits 3. It does not perform fresh authorization or confirmation reads for those disabled commands
+and never claims they ran. No-action/context/rejection results keep their own outcomes and skip the
+execution API instead. An HTTP 2xx response alone never counts as execution success: fresh Home
+Assistant state confirmation is required. Partial success has no rollback; do not automatically
+resubmit failed batches. Delayed commands still require fresh authorization again.
 
 ## Development
 
@@ -564,6 +635,7 @@ Implemented:
   construction, using the selected planning snapshot.
 - Independent fresh policy/state/registry revalidation and distinct dispatch-authorized commands.
 - Sequential light/switch power-service execution through a separate API, with fresh confirmation.
+- Explicit instruction-only execution CLI, separate from the read-only planning CLI.
 
 Planned:
 

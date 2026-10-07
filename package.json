@@ -7,6 +7,7 @@
 	"scripts": {
 		"dev": "tsx watch src/index.ts",
 		"start": "node dist/index.js",
+		"execute": "node --env-file-if-exists=.env dist/execute.js",
 		"build": "node --input-type=module -e \"import {rmSync} from 'node:fs'; rmSync('dist', {recursive: true, force: true});\" && tsc -p tsconfig.json",
 		"lint": "xo",
 		"lint:fix": "xo --fix",

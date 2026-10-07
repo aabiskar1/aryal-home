@@ -127,6 +127,7 @@ Implemented:
 - Registry enrichment, relevance selection, and deterministic execution readiness
 - Fresh pre-dispatch policy/state revalidation with production-owned readers
 - Separate sequential light/switch turn_on/turn_off dispatch API with fresh state confirmation
+- Separate instruction-only execution CLI using the existing planning pipeline and execution API
 
 The planning CLI remains read-only and stops at execution-ready commands. Deliberate execution uses
 `executeReadyCommands()` to freshly authorize commands, dispatch only `DispatchAuthorizedCommand`
@@ -136,3 +137,15 @@ DRY_RUN=true returns execution_disabled before authorization or confirmation rea
 permits deliberately invoking the execution API. The planning CLI stays read-only in both cases.
 Revalidate later commands after earlier dispatch/confirmation deferral. Do not broaden execution
 beyond light/switch turn_on and turn_off or accept arbitrary service data without explicit scope.
+
+After building, planning-only usage is `npm start -- "Turn off the example lamp"` with environment
+variables configured (or `node --env-file=.env dist/index.js "Turn off the example lamp"`).
+Deliberate execution is `npm run execute -- "Turn off the example lamp"`; it loads `.env` if present.
+Keep `src/index.ts` read-only. The separate `src/execute.ts` wrapper calls `runExecutionCli()` and
+only passes pipeline-produced readiness commands into `executeReadyCommands()`.
+AI proposes; deterministic application code owns policy, current authorization, service routing,
+dispatch, and confirmation. DRY_RUN=true may still plan but must never POST services.
+CLI exit codes: 0 for all-confirmed with no earlier rejections or valid model no_action; 1 for
+partial/rejected/insufficient-context/failed/error outcomes; 2 for invalid input; 3 for execution_disabled.
+Never print raw exceptions, credentials, registry inventory, or untrusted model summary/reason prose
+from the execution CLI. Partial success must remain visible and must not exit as complete success.

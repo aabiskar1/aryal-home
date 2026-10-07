@@ -118,13 +118,13 @@ const getHomeAssistantConfirmationState = async (
 	return state;
 };
 
-const confirmationAttempts = 3;
-const confirmationDelayMs = 250;
+const CONFIRMATION_MAX_READS = 5;
+const CONFIRMATION_RETRY_DELAY_MS = 500;
 
 const confirm = async (
 	command: DispatchAuthorizedCommand,
 ): Promise<ConfirmationFailureReason | undefined> => {
-	for (let attempt = 0; attempt < confirmationAttempts; attempt++) {
+	for (let attempt = 0; attempt < CONFIRMATION_MAX_READS; attempt++) {
 		let state;
 		try {
 			state = await getHomeAssistantConfirmationState(command);
@@ -144,8 +144,8 @@ const confirm = async (
 			return undefined;
 		}
 
-		if (attempt + 1 < confirmationAttempts) {
-			await delay(confirmationDelayMs);
+		if (attempt + 1 < CONFIRMATION_MAX_READS) {
+			await delay(CONFIRMATION_RETRY_DELAY_MS);
 		}
 	}
 

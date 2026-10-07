@@ -403,12 +403,14 @@ and validates the changed-state list response, including an empty list. That res
 the requested result.
 
 After a valid 2xx service response, a new GET of `/api/states/<entity_id>` must report `on` for
-`turn_on` or `off` for `turn_off`. Confirmation permits at most three uncached reads, with 250 ms
-between reads only when a valid binary state mismatches. A missing target (404), unknown/unavailable
-or other non-binary state, wrong response target, malformed response, or read failure fails immediately.
+`turn_on` or `off` for `turn_off`. Confirmation uses a bounded retry window for Home Assistant state
+propagation: at most five uncached reads, with 500 ms between reads only when a valid binary state
+mismatches. It returns immediately when the expected state is observed. A missing target (404),
+unknown/unavailable or other non-binary state, wrong response target, malformed response, or read failure
+fails immediately.
 POST requests have a 5-second timeout; confirmation reads have a 2-second timeout. Automatic HTTP
-retries and redirects are disabled for this transport. Confirmation therefore allows at most 500 ms
-of polling delay plus three bounded reads. No success is reported from HTTP status alone.
+retries and redirects are disabled for this transport. Confirmation therefore allows at most 2 seconds
+of polling delay plus five bounded reads. No success is reported from HTTP status alone.
 
 `ExecutionResult` contains ordered `CommandExecutionResult` entries with original input indices:
 

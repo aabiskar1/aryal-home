@@ -134,6 +134,8 @@ Implemented:
 The planning CLI remains read-only and stops at execution-ready commands. Deliberate execution uses
 `executeReadyCommands()` to freshly authorize commands, dispatch only `DispatchAuthorizedCommand`
 objects, and confirm current Home Assistant target state. Keep the lower-level dispatcher private.
+Confirmation uses a bounded retry window for Home Assistant state propagation, retrying only valid
+binary state mismatches and returning immediately on success or any other failure.
 Service transport and confirmation helpers must remain non-exported within that same module.
 DRY_RUN=true returns execution_disabled before authorization or confirmation reads; DRY_RUN=false
 permits deliberately invoking the execution API. The planning CLI stays read-only in both cases.

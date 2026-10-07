@@ -139,6 +139,7 @@ describe('production dispatch and confirmation', () => {
 			expect(http.post).not.toHaveBeenCalled();
 			expect(http.get).not.toHaveBeenCalled();
 			expect(confirmation).not.toHaveBeenCalled();
+			expect(delay).not.toHaveBeenCalled();
 			expect(freshStates).not.toHaveBeenCalled();
 			expect(getHomeAssistantRegistries).not.toHaveBeenCalled();
 			expect(loadEntityPolicy).not.toHaveBeenCalled();
@@ -211,6 +212,7 @@ describe('production dispatch and confirmation', () => {
 			]);
 			expect(freshStates).toHaveBeenCalledTimes(1);
 			expect(confirmation).toHaveBeenCalledTimes(1);
+			expect(delay).not.toHaveBeenCalled();
 		},
 	);
 
@@ -271,7 +273,7 @@ describe('production dispatch and confirmation', () => {
 		},
 	);
 
-	it('does not use POST changed states as confirmation', async () => {
+	it('fails after five mismatches without using POST changed states as confirmation', async () => {
 		http.post.mockResolvedValue({statusCode: 200, body: [state(target, 'on')]});
 		confirmation.mockResolvedValue({statusCode: 200, body: state()});
 		const result = await executeReadyCommands([ready()]);
@@ -279,23 +281,35 @@ describe('production dispatch and confirmation', () => {
 			outcome: 'confirmation_failed',
 			reason: 'state_mismatch',
 		});
-		expect(confirmation).toHaveBeenCalledTimes(3);
+		expect(confirmation).toHaveBeenCalledTimes(5);
 		expect(http.post).toHaveBeenCalledTimes(1);
-		expect(delay).toHaveBeenCalledTimes(2);
-		expect(delay).toHaveBeenNthCalledWith(1, 250);
-		expect(delay).toHaveBeenNthCalledWith(2, 250);
+		expect(delay).toHaveBeenCalledTimes(4);
+		for (let index = 1; index <= 4; index++) {
+			expect(delay).toHaveBeenNthCalledWith(index, 500);
+		}
 	});
 
-	it('confirms bounded delayed state convergence using new reads', async () => {
-		confirmation
-			.mockResolvedValueOnce({statusCode: 200, body: state()})
-			.mockResolvedValueOnce({statusCode: 200, body: state()})
-			.mockResolvedValueOnce({statusCode: 200, body: state(target, 'on')});
-		const result = await executeReadyCommands([ready()]);
-		expect(result.outcome).toBe('all_confirmed');
-		expect(confirmation).toHaveBeenCalledTimes(3);
-		expect(http.post).toHaveBeenCalledTimes(1);
-	});
+	it.each([2, 3, 5])(
+		'confirms on read %s and stops polling without retrying the POST',
+		async (expectedRead) => {
+			for (let index = 1; index < expectedRead; index++) {
+				confirmation.mockResolvedValueOnce({statusCode: 200, body: state()});
+			}
+
+			const result = await executeReadyCommands([ready()]);
+			expect(result.outcome).toBe('all_confirmed');
+			expect(result.results[0]).toMatchObject({outcome: 'confirmed'});
+			expect(confirmation).toHaveBeenCalledTimes(expectedRead);
+			expect(http.post).toHaveBeenCalledTimes(1);
+			expect(delay).toHaveBeenCalledTimes(expectedRead - 1);
+			for (let index = 1; index < expectedRead; index++) {
+				expect(delay).toHaveBeenNthCalledWith(index, 500);
+				const delayOrder = vi.mocked(delay).mock.invocationCallOrder[index - 1]!;
+				expect(delayOrder).toBeGreaterThan(confirmation.mock.invocationCallOrder[index - 1]!);
+				expect(delayOrder).toBeLessThan(confirmation.mock.invocationCallOrder[index]!);
+			}
+		},
+	);
 
 	it.each(['unknown', 'unavailable', 'unexpected'])(
 		'rejects confirmation state %s without polling',
@@ -307,6 +321,8 @@ describe('production dispatch and confirmation', () => {
 				reason: 'ineligible_state',
 			});
 			expect(confirmation).toHaveBeenCalledTimes(1);
+			expect(delay).not.toHaveBeenCalled();
+			expect(http.post).toHaveBeenCalledTimes(1);
 		},
 	);
 
@@ -317,6 +333,9 @@ describe('production dispatch and confirmation', () => {
 			outcome: 'confirmation_failed',
 			reason: 'target_missing',
 		});
+		expect(confirmation).toHaveBeenCalledTimes(1);
+		expect(delay).not.toHaveBeenCalled();
+		expect(http.post).toHaveBeenCalledTimes(1);
 	});
 
 	it.each([
@@ -331,18 +350,50 @@ describe('production dispatch and confirmation', () => {
 			reason: 'confirmation_read_failed',
 		});
 		expect(confirmation).toHaveBeenCalledTimes(1);
+		expect(delay).not.toHaveBeenCalled();
+		expect(http.post).toHaveBeenCalledTimes(1);
 	});
 
-	it('sanitizes failed confirmation reads', async () => {
-		confirmation.mockRejectedValue(new Error('Example private error and test-token.'));
-		const result = await executeReadyCommands([ready()]);
-		expect(result.results[0]).toMatchObject({
-			outcome: 'confirmation_failed',
-			reason: 'confirmation_read_failed',
-		});
-		expect(JSON.stringify(result)).not.toContain('private');
-		expect(JSON.stringify(result)).not.toContain('test-token');
-	});
+	it.each(['Error', 'TimeoutError'])(
+		'sanitizes failed confirmation reads (%s) immediately',
+		async (name) => {
+			const message = 'Example private error and test-token.';
+			const error = name === 'TimeoutError' ? new DOMException(message, name) : new Error(message);
+			confirmation.mockRejectedValue(error);
+			const result = await executeReadyCommands([ready()]);
+			expect(result.results[0]).toMatchObject({
+				outcome: 'confirmation_failed',
+				reason: 'confirmation_read_failed',
+			});
+			expect(JSON.stringify(result)).not.toContain('private');
+			expect(JSON.stringify(result)).not.toContain('test-token');
+			expect(confirmation).toHaveBeenCalledTimes(1);
+			expect(delay).not.toHaveBeenCalled();
+			expect(http.post).toHaveBeenCalledTimes(1);
+		},
+	);
+
+	it.each([
+		{statusCode: 200, body: state(target, 'unavailable'), reason: 'ineligible_state'},
+		{statusCode: 200, body: state(target, 'unknown'), reason: 'ineligible_state'},
+		{statusCode: 200, body: state(target, 'unexpected'), reason: 'ineligible_state'},
+		{statusCode: 404, body: {}, reason: 'target_missing'},
+		{statusCode: 200, body: {}, reason: 'confirmation_read_failed'},
+		{statusCode: 200, body: state(other, 'on'), reason: 'confirmation_read_failed'},
+		{statusCode: 500, body: {}, reason: 'confirmation_read_failed'},
+	])(
+		'stops polling after a mismatch followed by terminal response %j',
+		async ({statusCode, body, reason}) => {
+			confirmation
+				.mockResolvedValueOnce({statusCode: 200, body: state()})
+				.mockResolvedValueOnce({statusCode, body});
+			const result = await executeReadyCommands([ready()]);
+			expect(result.results[0]).toMatchObject({outcome: 'confirmation_failed', reason});
+			expect(confirmation).toHaveBeenCalledTimes(2);
+			expect(delay).toHaveBeenCalledExactlyOnceWith(500);
+			expect(http.post).toHaveBeenCalledTimes(1);
+		},
+	);
 
 	it('executes sequentially and reauthorizes later targets after confirmation', async () => {
 		const result = await executeReadyCommands([ready(), ready(other)]);

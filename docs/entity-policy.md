@@ -91,8 +91,8 @@ and confirmation deferred them. Initial rejections stay rejected; no old authori
 queued. Planning-time readiness and earlier authorization are not permanent permission.
 
 Each successful service response requires a fresh target-state read before reporting `confirmed`.
-At most three reads, 250 ms apart for binary state mismatches, accommodate short state-reporting
-delays. Missing, ineligible, malformed, or unreadable state fails confirmation immediately. HTTP
+Bounded retries for valid binary state mismatches accommodate Home Assistant state propagation.
+Missing, ineligible, malformed, or unreadable state fails confirmation immediately. HTTP
 success alone is not execution success. Partial success is reported without rollback or POST retries.
 See [execution and confirmation](../README.md#deliberate-execution-and-confirmation) for result types,
 failure reasons, transport bounds, and lifecycle. The planning CLI stays non-executing; delayed commands

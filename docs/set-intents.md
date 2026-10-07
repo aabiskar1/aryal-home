@@ -61,6 +61,22 @@ Explicit universal control wording additionally
 rejects individual model proposals as `set_intent_required`. A set returned for context selected by
 an explicit entity ID or specific friendly name is rejected as `single_target_context`.
 
+Deterministic invariant: without an explicit entity-ID/friendly-name targeting signal, an individual
+proposal for a selected entity belonging to an effective area/supported-domain scope with more than
+one permitted member is rejected as `contextual_subset_requires_set_intent`. This applies to every
+such entity intent, including model-enumerated subsets or whole collections. Counts use unique
+permitted entity IDs and effective registry area identity, separately per supported domain; no-op
+members still count. The guard also holds when only part of that permitted scope was selected.
+It does not infer all or manufacture a set intent: a proper model `set_action` uses existing expansion,
+and an ambiguous scope can return `insufficient_context`.
+
+A non-universal scope with exactly one permitted member may use an entity action, because there is
+no arbitrary choice among permitted members. Denied/ineligible entities do not increase that count.
+Explicit universal wording still requires `set_action`, even for one member. Exact entity-ID and
+friendly-name targeting retain the existing entity path. CLI selection diagnostics expose
+`intentMode` and the targeting reason; expansion diagnostics distinguish proper sets from rejected
+contextual subsets without printing model summary/reason prose.
+
 ## Expansion and results
 
 `expandPlanIntents()` resolves an untrusted semantic scope to validated effective area membership,

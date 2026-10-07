@@ -159,3 +159,9 @@ Expanded `ConcretePlan` members must pass the existing policy/readiness pipeline
 already satisfied; ineligible/non-permitted exclusions and material rejections keep outcomes partial.
 Keep explicit entity targets single-target and explicit all/every requests from silently accepting
 individual subsets. No labels/whole-home set scopes or batch confirmation thresholds are implemented.
+
+Without an explicit entity-ID/friendly-name targeting signal, reject individual proposals belonging
+to a relevant permitted area/domain scope with more than one member as
+`contextual_subset_requires_set_intent`. Do not infer or convert to all: the model must return a proper
+set intent or insufficient context. Non-universal scopes with one permitted member may use an entity
+proposal; explicit universal requests still require set intents regardless of member count.

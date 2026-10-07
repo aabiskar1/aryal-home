@@ -357,6 +357,7 @@ export const selectionDiagnostic = (selection: SelectionResult, permittedCount: 
 	selection.kind === 'ready'
 		? {
 				mode: selection.mode,
+				intentMode: selection.intentMode,
 				reason: selection.reasons[0],
 				permittedCount,
 				selectedCount: selection.states.length,

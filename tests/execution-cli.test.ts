@@ -522,3 +522,46 @@ describe('set expansion execution and diagnostics', () => {
 		expect(http.post).not.toHaveBeenCalled();
 	});
 });
+
+describe('contextual subset execution boundary', () => {
+	it.each([target, extra])(
+		'rejects arbitrary %s from the same contextual collection before executing anything',
+		async (entityId) => {
+			configureCollection();
+			vi.mocked(getHomeAssistantStates).mockResolvedValue([
+				state(target, 'on'),
+				state(extra, 'on'),
+				state(other, 'on'),
+			]);
+			vi.mocked(requestOllamaChat).mockResolvedValue(
+				JSON.stringify({
+					outcome: 'propose_actions',
+					summary: 'Proposed plan: RAW_CONTEXTUAL_SUMMARY',
+					actions: [{entityId, action: 'turn_off', reason: 'RAW_CONTEXTUAL_REASON'}],
+				}),
+			);
+			const result = await runExecutionCli('Example Room is empty and the lights are still on');
+			expect(result).toMatchObject({exitCode: 1, outcome: 'insufficient_context'});
+			expect(result.planning?.selection).toMatchObject({
+				intentMode: 'mixed',
+				reason: 'area_domain',
+			});
+			expect(result.planning?.intentExpansion.rejectedIntents).toEqual([
+				{
+					intentIndex: 0,
+					intentType: 'entity_action',
+					reason: 'contextual_subset_requires_set_intent',
+				},
+			]);
+			expect(result.readiness?.commands).toEqual([]);
+			expect(executionSpy).not.toHaveBeenCalled();
+			expect(http.post).not.toHaveBeenCalled();
+			expect(http.get).not.toHaveBeenCalled();
+			expect(getHomeAssistantStates).toHaveBeenCalledTimes(1);
+			const output = formatExecutionCliResult(result);
+			expect(output).toContain('contextual_subset_requires_set_intent');
+			expect(output).not.toContain('RAW_CONTEXTUAL_SUMMARY');
+			expect(output).not.toContain('RAW_CONTEXTUAL_REASON');
+		},
+	);
+});

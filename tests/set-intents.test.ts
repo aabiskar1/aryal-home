@@ -342,6 +342,8 @@ describe('semantic planning through readiness', () => {
 			]);
 			expect(result.executionReadiness.commands).toHaveLength(1);
 			expect(result.intentExpansion.sets).toEqual([]);
+			expect(result.selection).toMatchObject({kind: 'ready', intentMode: 'entity_only'});
+			expect(result.intentExpansion.rejectedIntents).toEqual([]);
 		},
 	);
 
@@ -560,5 +562,158 @@ describe('semantic planning through readiness', () => {
 		const result = await run(input);
 		expect(result.executionReadiness.commands).toEqual([]);
 		expect(result.intentExpansion.rejectedIntents[0]?.reason).toBe('unknown_scope');
+	});
+});
+
+describe('contextual collections cannot degrade into individual proposals', () => {
+	const instruction = 'The Studio is empty and the lights are still on';
+	const entityIntent = (entityId: string) => ({
+		entityId,
+		action: 'turn_off' as const,
+		reason: 'Untrusted arbitrary member choice.',
+	});
+
+	it.each([1, 2, 3])(
+		'rejects %i model-enumerated members instead of interpreting them as the collection',
+		async (proposedCount) => {
+			const input = fixture(3);
+			const actions = input.states
+				.slice(0, proposedCount)
+				.map((state) => entityIntent(state.entity_id));
+			const result = await run(input, instruction, actions);
+			expect(result.selection).toMatchObject({
+				kind: 'ready',
+				intentMode: 'mixed',
+				reasons: ['area_domain'],
+			});
+			expect(result.validatedPlan.outcome).toBe('insufficient_context');
+			expect(result.validatedPlan.actions).toEqual([]);
+			expect(result.executionReadiness.commands).toEqual([]);
+			expect(result.intentExpansion.rejectedIntents).toEqual(
+				actions.map((_action, intentIndex) => ({
+					intentIndex,
+					intentType: 'entity_action',
+					reason: 'contextual_subset_requires_set_intent',
+				})),
+			);
+		},
+	);
+
+	it('accepts a proper set for the same contextual instruction and expands every applicable permitted member', async () => {
+		const result = await run(fixture(4, 'Studio', 'light', {noOp: 1}), instruction);
+		expect(result.intentExpansion.rejectedIntents).toEqual([]);
+		expect(result.intentExpansion.sets[0]).toMatchObject({
+			matchedCount: 4,
+			intentType: 'set_action',
+		});
+		expect(result.executionReadiness.commands).toHaveLength(3);
+		expect(result.intentExpansion.satisfiedCount).toBe(1);
+	});
+
+	it('does not discount already-satisfied members when detecting a multi-member collection', async () => {
+		const input = fixture(2, 'Studio', 'light', {noOp: 1});
+		const result = await run(input, instruction, [entityIntent(input.states[0]!.entity_id)]);
+		expect(result.executionReadiness.commands).toEqual([]);
+		expect(result.intentExpansion.rejectedIntents[0]?.reason).toBe(
+			'contextual_subset_requires_set_intent',
+		);
+	});
+
+	it('rejects repeated contextual singleton choices identically even when the model changes the chosen device', async () => {
+		const input = fixture(3);
+		const first = await run(input, instruction, [entityIntent(input.states[0]!.entity_id)]);
+		const second = await run(input, instruction, [entityIntent(input.states[2]!.entity_id)]);
+		expect(first.intentExpansion.rejectedIntents).toEqual([
+			{
+				intentIndex: 0,
+				intentType: 'entity_action',
+				reason: 'contextual_subset_requires_set_intent',
+			},
+		]);
+		expect(second.intentExpansion).toEqual(first.intentExpansion);
+		expect(first.executionReadiness.commands).toEqual([]);
+		expect(second.executionReadiness.commands).toEqual([]);
+	});
+
+	it('allows an entity proposal when the relevant domain has only one permitted member', async () => {
+		const input = fixture(3, 'Studio', 'light', {denied: 1, unavailable: 2});
+		const result = await run(input, instruction, [entityIntent(input.states[0]!.entity_id)]);
+		expect(result.intentExpansion.rejectedIntents).toEqual([]);
+		expect(result.executionReadiness.commands).toEqual([
+			{domain: 'light', service: 'turn_off', target: {entity_id: input.states[0]!.entity_id}},
+		]);
+	});
+
+	it('still requires a set for a universal request even with only one permitted member', async () => {
+		const input = fixture(1);
+		const result = await run(input, 'Turn off all Studio lights', [
+			entityIntent(input.states[0]!.entity_id),
+		]);
+		expect(result.intentExpansion.rejectedIntents[0]?.reason).toBe('set_intent_required');
+		expect(result.executionReadiness.commands).toEqual([]);
+	});
+
+	it('counts mixed-area lights and switches separately without rejecting a singleton domain due to another domain', async () => {
+		const input = fixture(3);
+		const switches = fixture(1, 'Studio', 'switch');
+		input.entities.push(...switches.entities);
+		input.policy = resolveEntityPolicy(input.entities, {
+			version: 1,
+			allow: [{domain: 'light'}, {domain: 'switch'}],
+			deny: [],
+		});
+		const result = await run(
+			input,
+			'Nobody is in Studio and the lights and switches are still on',
+			[entityIntent(input.states[0]!.entity_id), entityIntent(switches.states[0]!.entity_id)],
+		);
+		expect(result.intentExpansion.rejectedIntents).toEqual([
+			{
+				intentIndex: 0,
+				intentType: 'entity_action',
+				reason: 'contextual_subset_requires_set_intent',
+			},
+		]);
+		expect(result.executionReadiness.commands).toEqual([
+			{domain: 'switch', service: 'turn_off', target: {entity_id: switches.states[0]!.entity_id}},
+		]);
+		const collectionResult = await run(
+			input,
+			'Nobody is in Studio and the lights and switches are still on',
+			[setIntent()],
+		);
+		expect(collectionResult.executionReadiness.commands).toHaveLength(3);
+		expect(
+			collectionResult.executionReadiness.commands.every((command) => command.domain === 'light'),
+		).toBe(true);
+	});
+
+	it('does not convert plural mentions into all or accept entity subsets in another domain/area alias', async () => {
+		const input = fixture(4, 'Workshop', 'switch');
+		const result = await run(input, 'Nobody is in Making Space and the switches are still on', [
+			entityIntent(input.states[1]!.entity_id),
+		]);
+		expect(result.intentExpansion.sets).toEqual([]);
+		expect(result.intentExpansion.rejectedIntents[0]?.reason).toBe(
+			'contextual_subset_requires_set_intent',
+		);
+		expect(result.executionReadiness.commands).toEqual([]);
+	});
+
+	it('does not let a partial context hide the other permitted scope members', () => {
+		const input = fixture(3);
+		const result = expandPlanIntents(
+			plan([entityIntent(input.states[0]!.entity_id)]),
+			input.entities,
+			input.policy,
+			{
+				entityIds: new Set([input.states[0]!.entity_id]),
+				setScopes: [],
+				singleTarget: false,
+				requiresSetIntent: false,
+			},
+		);
+		expect(result.plan.actions).toEqual([]);
+		expect(result.rejectedIntents[0]?.reason).toBe('contextual_subset_requires_set_intent');
 	});
 });

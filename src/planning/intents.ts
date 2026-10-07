@@ -18,7 +18,8 @@ export type IntentRejectionReason =
 	| 'zero_permitted_matches'
 	| 'incomplete_scope_context'
 	| 'single_target_context'
-	| 'set_intent_required';
+	| 'set_intent_required'
+	| 'contextual_subset_requires_set_intent';
 
 export type SetExpansion = {
 	intentIndex: number;
@@ -61,6 +62,46 @@ const areaMembers = (entities: DiscoveredEntity[], areaId: string, domain: strin
 			entity.metadata.status === 'available' &&
 			entity.metadata.areaId === areaId,
 	);
+
+/** Individual members of relevant multi-member scopes need explicit targeting or a set intent. */
+const contextualCollectionTargets = (
+	entities: DiscoveredEntity[],
+	policy: ResolvedEntityPolicy,
+	contextEntityIds: ReadonlySet<string>,
+): ReadonlySet<string> => {
+	const scopes = new Map<string, Set<string>>();
+	const domains = new Set<string>(supportedDomains);
+	for (const entity of entities) {
+		const {metadata} = entity;
+		if (
+			!isPermitted(entity, policy) ||
+			metadata.status !== 'available' ||
+			metadata.areaId === undefined ||
+			metadata.areaName === undefined ||
+			!domains.has(entity.domain)
+		) {
+			continue;
+		}
+
+		const key = `${metadata.areaId}:${entity.domain}`;
+		const members = scopes.get(key) ?? new Set<string>();
+		members.add(entity.entityId);
+		scopes.set(key, members);
+	}
+
+	const targets = new Set<string>();
+	for (const members of scopes.values()) {
+		if (members.size > 1) {
+			for (const entityId of members) {
+				if (contextEntityIds.has(entityId)) {
+					targets.add(entityId);
+				}
+			}
+		}
+	}
+
+	return targets;
+};
 
 const excludedMemberCounts = (
 	members: DiscoveredEntity[],
@@ -146,13 +187,18 @@ export const expandPlanIntents = (
 	const actions: ProposedAction[] = [];
 	const sets: SetExpansion[] = [];
 	const rejectedIntents: IntentExpansionResult['rejectedIntents'] = [];
+	const contextualTargets = context.singleTarget
+		? new Set<string>()
+		: contextualCollectionTargets(entities, policy, context.entityIds);
 	for (const [intentIndex, intent] of plan.actions.entries()) {
 		if (!('type' in intent)) {
-			if (context.requiresSetIntent) {
+			if (context.requiresSetIntent || contextualTargets.has(intent.entityId)) {
 				rejectedIntents.push({
 					intentIndex,
 					intentType: 'entity_action',
-					reason: 'set_intent_required',
+					reason: context.requiresSetIntent
+						? 'set_intent_required'
+						: 'contextual_subset_requires_set_intent',
 				});
 			} else {
 				actions.push(intent);

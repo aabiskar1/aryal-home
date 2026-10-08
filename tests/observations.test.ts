@@ -117,6 +117,175 @@ const run = async (instruction: string, input = fixture(), actions: Plan['action
 	return {result, chat, request, context};
 };
 
+const unassignedLightId = 'light.example_unassigned_helper';
+const unassignedLightName = 'Example Unassigned Helper';
+const fixtureWithUnassignedLight = (
+	states = defaultStates.filter(({entity_id: entityId}) => !entityId.includes('bedroom')),
+) =>
+	fixture(
+		[
+			...states,
+			{
+				...state(unassignedLightId, 'on'),
+				attributes: {friendly_name: unassignedLightName},
+			},
+		],
+		allowedPolicy,
+		(registry) => {
+			registry.entities.find(({entity_id: entityId}) => entityId === unassignedLightId)!.area_id =
+				null;
+		},
+	);
+
+describe('area-conditioned planning with permitted no-area lights', () => {
+	it.each(['Turn off lights in rooms that are unoccupied', conditionalGoal])(
+		'keeps complete room reasoning available for %s without including no-area targets',
+		async (instruction) => {
+			const input = fixtureWithUnassignedLight();
+			expect(input.policy.allowedEntityIds.has(unassignedLightId)).toBe(true);
+			expect(
+				normalizeStates(input.entities).find(({entityId}) => entityId === unassignedLightId),
+			).toMatchObject({area: undefined, supportedActions: ['turn_on', 'turn_off']});
+			const {result, context} = await run(instruction, input, [lightSetIntent]);
+			expect(result.selection.kind).toBe('ready');
+			expect(context?.states).toHaveLength(3);
+			expect(JSON.stringify(context)).not.toContain(unassignedLightId);
+			expect(context?.observations).toContainEqual(
+				expect.objectContaining({area: 'Living Room', deviceClass: 'occupancy', state: 'off'}),
+			);
+			if (result.selection.kind === 'ready') {
+				expect(result.selection.contextEntityIds.has(unassignedLightId)).toBe(false);
+				expect(result.selection.setScopes).toEqual([
+					{area: 'Living Room', aliases: ['Lounge'], domain: 'light'},
+				]);
+			}
+
+			expect(result.intentExpansion.sets[0]?.matchedCount).toBe(3);
+			expect(result.intentExpansion.sets[0]?.expandedActions.map(({entityId}) => entityId)).toEqual(
+				[
+					'light.example_living_first',
+					'light.example_living_satisfied',
+					'light.example_living_second',
+				],
+			);
+			expect(result.executionReadiness.commands.map(({target}) => target.entity_id)).toEqual([
+				'light.example_living_first',
+				'light.example_living_second',
+			]);
+			expect(result.intentExpansion.outcome).toBe('complete');
+		},
+	);
+
+	it.each([
+		`Turn off ${unassignedLightId} if unoccupied`,
+		`Turn off ${unassignedLightName} if unoccupied`,
+		`Turn off ${unassignedLightId} if the Living Room is unoccupied`,
+		`Turn off all lights in rooms that are unoccupied, including ${unassignedLightName}`,
+		`Turn off light.example_living_first and ${unassignedLightId} if unoccupied`,
+	])(
+		'fails closed for an explicitly requested no-area conditional target in %s',
+		async (instruction) => {
+			const {result, chat} = await run(instruction, fixtureWithUnassignedLight(), [lightSetIntent]);
+			expect(result.selection).toEqual({
+				kind: 'insufficient_context',
+				reason: 'missing_observations',
+			});
+			expect(chat).not.toHaveBeenCalled();
+			expect(result.executionReadiness.commands).toEqual([]);
+		},
+	);
+
+	it.each([
+		'Turn off Bedroom lights if unoccupied',
+		'Turn off lights in rooms that are unoccupied',
+	])('still requires occupancy for every included area in %s', async (instruction) => {
+		const input = fixtureWithUnassignedLight(
+			defaultStates.filter(
+				({entity_id: entityId}) => entityId !== 'binary_sensor.example_bedroom_occupancy',
+			),
+		);
+		const {result, chat} = await run(instruction, input, [lightSetIntent]);
+		expect(result.selection).toEqual({
+			kind: 'insufficient_context',
+			reason: 'missing_observations',
+		});
+		expect(chat).not.toHaveBeenCalled();
+		expect(result.executionReadiness.commands).toEqual([]);
+	});
+
+	it('rejects a model-invented no-area target while retaining valid area set expansion', async () => {
+		const {result} = await run(conditionalGoal, fixtureWithUnassignedLight(), [
+			lightSetIntent,
+			{entityId: unassignedLightId, action: 'turn_off', reason: 'Model guessed room membership.'},
+		]);
+		const rejected = result.validatedPlan.rejectedActions.find(
+			({action}) => action.entityId === unassignedLightId,
+		);
+		expect(rejected?.reason).toBe('not_in_context');
+		expect(result.executionReadiness.commands).toHaveLength(2);
+		expect(result.intentExpansion.outcome).toBe('partial');
+	});
+
+	it('preserves contextual subset protection with a no-area light in the inventory', async () => {
+		const {result} = await run(conditionalGoal, fixtureWithUnassignedLight(), [
+			{entityId: 'light.example_living_first', action: 'turn_off', reason: 'Model chose a subset.'},
+		]);
+		expect(result.intentExpansion.rejectedIntents[0]?.reason).toBe(
+			'contextual_subset_requires_set_intent',
+		);
+		expect(result.executionReadiness.commands).toEqual([]);
+	});
+
+	it('keeps occupancy evidence read-only when no-area lights are excluded', async () => {
+		const entityId = 'binary_sensor.example_living_occupancy';
+		const {result, context} = await run(conditionalGoal, fixtureWithUnassignedLight(), [
+			lightSetIntent,
+			{entityId, action: 'turn_off', reason: 'Model tried to act on evidence.'},
+		]);
+		expect(context?.observations).toContainEqual(expect.objectContaining({entityId}));
+		expect(context?.observations.every((observation) => !('supportedActions' in observation))).toBe(
+			true,
+		);
+		expect(result.validatedPlan.rejectedActions[0]?.reason).toBe('not_in_context');
+		expect(result.executionReadiness.commands.map(({target}) => target.entity_id)).toEqual([
+			'light.example_living_first',
+			'light.example_living_second',
+		]);
+	});
+
+	it('retains explicit no-area light control for requests without an area condition', async () => {
+		const {result} = await run(`Turn off ${unassignedLightId}`, fixtureWithUnassignedLight(), [
+			{entityId: unassignedLightId, action: 'turn_off', reason: 'Explicit unconditional request.'},
+		]);
+		expect(result.executionReadiness.commands).toEqual([
+			{domain: 'light', service: 'turn_off', target: {entity_id: unassignedLightId}},
+		]);
+	});
+
+	it('budgets the complete participating action and observation context after excluding no-area lights', async () => {
+		const input = fixtureWithUnassignedLight();
+		const {result, request} = await run(conditionalGoal, input, [lightSetIntent]);
+		expect(result.selection.kind).toBe('ready');
+		if (result.selection.kind !== 'ready') {
+			return;
+		}
+
+		const bytes = Buffer.byteLength(
+			JSON.stringify(createOllamaChatPayload(request!, options.model)),
+		);
+		expect(result.selection.requestBytes).toBe(bytes);
+		const chat = vi.fn<OllamaChatTransport>(async () => JSON.stringify(plan([lightSetIntent])));
+		const overflow = await runPlanningPipeline(conditionalGoal, input.entities, input.policy, {
+			...options,
+			maxRequestBytes: bytes + outputHeadroomBytes - 1,
+			chat,
+		});
+		expect(overflow.selection).toEqual({kind: 'insufficient_context', reason: 'over_budget'});
+		expect(chat).not.toHaveBeenCalled();
+		expect(overflow.executionReadiness.commands).toEqual([]);
+	});
+});
+
 describe('read-only observation context from real HA state and registries', () => {
 	it.each([
 		{

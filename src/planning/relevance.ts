@@ -320,6 +320,25 @@ const hasRequiredEvidence = (
 			),
 	);
 
+// Explicit user-provided context still works. HA-dependent conditions need complete evidence.
+const requiresObservationEvidence = (
+	instruction: string,
+	profiles: ObservationProfile[],
+	hasActionTargets: boolean,
+): boolean =>
+	profiles.length > 0 &&
+	(!hasActionTargets ||
+		hasAnyPhrase(instruction, [
+			'if',
+			'when',
+			'where',
+			'that are',
+			'which are',
+			'unoccupied rooms',
+			'empty rooms',
+			'vacant rooms',
+		]));
+
 export const selectRelevantContext = (
 	instruction: string,
 	candidates: RelevanceCandidate[],
@@ -344,7 +363,26 @@ export const selectRelevantContext = (
 	);
 	const isSingleTarget = ['exact_entity', 'friendly_name'].includes(choice.reason);
 
-	const states = choice.selected.map((candidate) => candidate.state);
+	const requiresEvidence = requiresObservationEvidence(
+		normalizedInstruction,
+		profiles,
+		choice.selected.length > 0,
+	);
+	const hasExplicitNoAreaTarget = actionable.some(
+		({state}) =>
+			state.area === undefined &&
+			(explicitIds.includes(state.entityId.toLowerCase()) ||
+				(state.name !== undefined && hasPhrase(normalizedInstruction, state.name))),
+	);
+	if (requiresEvidence && hasExplicitNoAreaTarget) {
+		return {kind: 'insufficient_context', reason: 'missing_observations'};
+	}
+
+	// Unassigned entities cannot participate in an area-conditioned decision. Withhold their
+	// context membership as well as their evidence requirement; never infer an area from a name.
+	const states = choice.selected
+		.map((candidate) => candidate.state)
+		.filter((state) => !requiresEvidence || state.area !== undefined);
 	const targetAreas = new Set(
 		states.flatMap((state) => (state.area === undefined ? [] : [state.area])),
 	);
@@ -371,20 +409,6 @@ export const selectRelevantContext = (
 		const observation = toObservationState(state);
 		return observation === undefined ? [] : [observation];
 	});
-	// Explicit user-provided context still works. HA-dependent conditions need complete evidence.
-	const requiresEvidence =
-		profiles.length > 0 &&
-		(states.length === 0 ||
-			hasAnyPhrase(normalizedInstruction, [
-				'if',
-				'when',
-				'where',
-				'that are',
-				'which are',
-				'unoccupied rooms',
-				'empty rooms',
-				'vacant rooms',
-			]));
 	// Never omit invalid selected evidence or decide conditional changes for an uncovered area.
 	const isMissingEvidence =
 		explicitIds.some(

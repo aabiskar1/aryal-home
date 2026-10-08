@@ -26,6 +26,10 @@ Ambiguous fallback does not automatically include observations. Observation ques
 conditional goals require the requested profiles; observation questions require evidence for every
 matched requested area, and conditional room actions require evidence for each selected actionable
 area. Missing or invalid required evidence returns `insufficient_context`.
+For these area-dependent conditions, actionable entities without an area are excluded from model
+action context and set membership; their names never supply a room assignment. They do not make
+otherwise complete room evidence insufficient. An explicit conditional request for a no-area entity
+still fails closed, including when it names a room or accompanies a broader collection request.
 Existing explicit user-provided room facts continue to support semantic planning. The model must
 report insufficient context for conditions it cannot establish and must never infer a light action
 from occupancy alone or invent an automation.

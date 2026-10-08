@@ -13,7 +13,13 @@ export type NormalizedEntityState = {
 	supportedActions: CanonicalAction[];
 };
 
-const observationDeviceClassSchema = z.enum(['presence', 'occupancy', 'temperature', 'humidity']);
+export const observationDeviceClassSchema = z.enum([
+	'presence',
+	'occupancy',
+	'temperature',
+	'humidity',
+]);
+export type ObservationDeviceClass = z.infer<typeof observationDeviceClassSchema>;
 const unitSchema = z.string().trim().min(1).max(16);
 
 const getStringAttribute = (

@@ -363,25 +363,37 @@ describe('fresh pre-dispatch revalidation', () => {
 		expect(result.decisions[0]).toMatchObject({status: 'rejected', reason: 'routing_mismatch'});
 	});
 
-	it('never broadens capabilities for an unsupported target domain', async () => {
-		const entityId = 'sensor.example_observation';
-		const command = {
-			domain: 'sensor',
-			service: 'turn_on',
-			target: {entity_id: entityId},
-		} as unknown as ExecutionReadyCommand;
-		const result = await revalidateWithMockedReaders(
-			[command],
-			readers([state(entityId)], registries([entityId]), {
-				version: 1,
-				allow: [{domain: 'sensor'}],
-				deny: [],
-			}),
-		);
+	it.each([
+		{domain: 'binary_sensor', deviceClass: 'occupancy', value: 'off', reason: 'unsupported_action'},
+		{domain: 'binary_sensor', deviceClass: 'presence', value: 'off', reason: 'unsupported_action'},
+		{domain: 'sensor', deviceClass: 'temperature', value: '21', reason: 'ineligible_state'},
+		{domain: 'sensor', deviceClass: 'humidity', value: '45', reason: 'ineligible_state'},
+	])(
+		'never authorizes a forged command targeting a $deviceClass observation',
+		async ({domain, deviceClass, value, reason}) => {
+			const entityId = `${domain}.example_observation`;
+			const command = {
+				domain,
+				service: 'turn_on',
+				target: {entity_id: entityId},
+			} as unknown as ExecutionReadyCommand;
+			const result = await revalidateWithMockedReaders(
+				[command],
+				readers(
+					[{...state(entityId, value), attributes: {device_class: deviceClass}}],
+					registries([entityId]),
+					{
+						version: 1,
+						allow: [{domain}],
+						deny: [],
+					},
+				),
+			);
 
-		expect(result.commands).toEqual([]);
-		expect(result.decisions[0]).toMatchObject({status: 'rejected', reason: 'unsupported_action'});
-	});
+			expect(result.commands).toEqual([]);
+			expect(result.decisions[0]).toMatchObject({status: 'rejected', reason});
+		},
+	);
 
 	it('uses one fresh snapshot and policy resolution for multiple commands in input order', async () => {
 		const commands = [ready(other), ready()];

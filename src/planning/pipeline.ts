@@ -29,7 +29,9 @@ const insufficientPlan = (
 	summary:
 		reason === 'over_budget'
 			? 'Proposed plan: The complete permitted context exceeds the configured planning budget.'
-			: 'Proposed plan: No permitted relevant context was found for this request.',
+			: reason === 'missing_observations'
+				? 'Proposed plan: Required read-only observations are missing or incomplete.'
+				: 'Proposed plan: No permitted relevant context was found for this request.',
 	actions: [],
 });
 
@@ -71,6 +73,7 @@ export const runPlanningPipeline = async (
 		{
 			instruction,
 			states: selection.states,
+			observations: selection.observations,
 			setScopes: selection.setScopes,
 			intentMode: selection.intentMode,
 		},

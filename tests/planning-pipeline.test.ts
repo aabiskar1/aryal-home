@@ -241,7 +241,7 @@ describe('planning pipeline with relevance selection', () => {
 
 		expect(result.selection.kind).toBe('ready');
 		expect(result.validatedPlan.actions).toEqual([]);
-		expect(result.validatedPlan.rejectedActions[0]?.reason).toBe('unsupported_action');
+		expect(result.validatedPlan.rejectedActions[0]?.reason).toBe('not_in_context');
 		expect(result.executionReadiness.commands).toEqual([]);
 		expect(result.executionReadiness.rejectedActions).toEqual([]);
 	});
@@ -306,7 +306,7 @@ describe('planning pipeline with relevance selection', () => {
 		]);
 		expect(result.validatedPlan.rejectedActions.map((item) => item.reason)).toEqual([
 			'denied',
-			'unsupported_action',
+			'not_in_context',
 		]);
 		expect(result.executionReadiness.outcome).toBe('ready');
 		expect(result.executionReadiness.commands).toEqual([

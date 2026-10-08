@@ -52,6 +52,22 @@ Relevance selection runs after this policy is resolved. It may reduce which perm
 reach the model, but it cannot grant access or bypass a deny. Post-model action validation requires
 both full-policy permission and membership in the exact selected model context.
 
+## Read-only planning evidence
+
+The same explicit allow/deny selectors govern observation exposure to the local model. For example,
+an allow for `binary_sensor.example_occupancy` can expose its occupancy fact; it cannot permit a
+service call to that entity. Denies still override allows. Only normalized `occupancy`/`presence`
+binary sensors and `temperature`/`humidity` sensors are supported as observations.
+
+Selected evidence is sent in a separate `observations` array without supported actions or service
+routing. Observation IDs are excluded from actionable context membership, set scopes, and readiness.
+The fixed capability catalogue and execution schemas independently restrict commands to light/switch
+`turn_on`/`turn_off`, even when observation selectors allow model exposure. HA facts can influence
+semantic reasoning when combined with the user's goal; facts never confer action authority.
+See [planning context and execution authority](architecture.md) for relevance, completeness, and budget behavior.
+
+## Execution boundaries
+
 Planning-time `ValidatedAction` proposals then enter a separate deterministic execution-readiness
 layer. It rejects duplicates, conflicting actions, and no-ops against the selected normalized
 snapshot, and constructs application-owned domain/service/single-entity-target commands with no

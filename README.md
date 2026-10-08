@@ -76,6 +76,9 @@ connection retrieves entity, device, area, and label registries for internal pol
 Registry-only entries never become controllable entities. Opaque registry IDs and raw registry
 payloads are not sent to Ollama; a validated effective-area display name may be included for a
 selected entity. Relevance selection runs only after policy resolution and never grants permission.
+Actionable lights/switches and read-only occupancy/presence or temperature/humidity observations are
+distinct model context lists. Observation exposure requires the existing allow/deny policy and grants
+no execution authority. See [planning context and execution authority](docs/architecture.md).
 
 ## Implemented capabilities
 
@@ -156,14 +159,16 @@ Selection is deterministic and uses no extra model call or external service. It 
 entity IDs and friendly names, validated effective-area names and aliases, and a small set of
 domain terms. For example, “Turn on kitchen lights” selects permitted kitchen lights; “Turn off
 all lights” selects every permitted light; and “Turn on bedroom lamp” can select a named lamp.
-Presence, temperature, and weather questions select relevant permitted read-only observations.
-Motion alone is not treated as proof that somebody is home.
+Presence/occupancy, temperature, and humidity requests select relevant permitted read-only observations
+in a separate evidence list, narrowed by area where possible. Motion alone is not proof of presence.
 
 An instruction without a clear target, such as “I'm going to bed,” conservatively includes all
-permitted entities. A clearly targeted request with no permitted match returns
+permitted actionable entities. Observations require an explicit target or relevant vocabulary;
+recognized conditional room goals return `insufficient_context` when required area evidence is missing.
+A clearly targeted request with no permitted match returns
 `insufficient_context` without calling Ollama. Selection never silently truncates a broad set.
 The planning budget measures the complete serialized Ollama request (including prompt, instruction,
-schema, and selected entities) plus 4,096 bytes of output headroom. If the required complete
+schema, selected actionable entities, and observations) plus 4,096 bytes of output headroom. If the required complete
 selection exceeds `PLANNING_REQUEST_MAX_BYTES`, ARYAL returns `insufficient_context` and does not
 call Ollama. This byte limit is a conservative application guard, not an exact model token count;
 adjust it for the locally deployed model and available memory.

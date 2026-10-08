@@ -1,4 +1,5 @@
 import {describe, expect, it} from 'vitest';
+import {ZodError} from 'zod';
 import {discoverEntities} from '../src/home-assistant/discovery.js';
 import type {RegistrySnapshot} from '../src/home-assistant/registry-client.js';
 import type {HomeAssistantState} from '../src/home-assistant/schemas.js';
@@ -219,7 +220,7 @@ describe('planning pipeline with relevance selection', () => {
 		expect(result.validatedPlan.outcome).toBe('insufficient_context');
 	});
 
-	it('keeps a selected observation read-only after model generation', async () => {
+	it('rejects a selected observation action at the observation-only schema boundary', async () => {
 		const observation = state('binary_sensor.example_occupancy', 'Example Occupancy');
 		observation.attributes.device_class = 'occupancy';
 		const discovered = discoverEntities([observation], {
@@ -234,16 +235,12 @@ describe('planning pipeline with relevance selection', () => {
 			allow: [{domain: 'binary_sensor'}],
 			deny: [],
 		});
-		const result = await runPlanningPipeline('Is anyone home?', discovered, fullPolicy, {
-			...options,
-			chat: async () => plan(observation.entity_id),
-		});
-
-		expect(result.selection.kind).toBe('ready');
-		expect(result.validatedPlan.actions).toEqual([]);
-		expect(result.validatedPlan.rejectedActions[0]?.reason).toBe('not_in_context');
-		expect(result.executionReadiness.commands).toEqual([]);
-		expect(result.executionReadiness.rejectedActions).toEqual([]);
+		await expect(
+			runPlanningPipeline('Is anyone home?', discovered, fullPolicy, {
+				...options,
+				chat: async () => plan(observation.entity_id),
+			}),
+		).rejects.toBeInstanceOf(ZodError);
 	});
 
 	it.each([

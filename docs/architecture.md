@@ -13,6 +13,14 @@ Planning context separates two kinds of policy-permitted entities:
   an optional numeric measurement unit. Evidence contains no domain, supported action, service,
   target payload, or raw attributes.
 
+When observations are supplied without actionable states or set scopes, planning uses
+`observation_only` mode and a dedicated informational prompt. Its generated JSON Schema and strict
+response parser permit only `no_action` or `insufficient_context` with an empty `actions` array;
+neither entity actions nor set intents have a representable shape. Usable evidence answers the
+question in the summary. Invalid control proposals are rejected before intent expansion rather than
+converted into success. Existing policy/context validation remains a separate defense. Conditional
+control requests with actionable states retain their existing entity, mixed, or set planning mode.
+
 The initial evidence catalogue is intentionally narrow: binary sensors with `occupancy` or
 `presence` device classes and sensors with `temperature` or `humidity` device classes. Binary
 observations must report `on`/`off`; numeric observations must report a finite decimal number.

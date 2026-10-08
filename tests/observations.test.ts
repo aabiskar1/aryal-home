@@ -1,5 +1,6 @@
 import {Buffer} from 'node:buffer';
 import {describe, expect, expectTypeOf, it, vi} from 'vitest';
+import {ZodError} from 'zod';
 import {discoverEntities} from '../src/home-assistant/discovery.js';
 import type {RegistrySnapshot} from '../src/home-assistant/registry-client.js';
 import {homeAssistantStatesSchema, type HomeAssistantState} from '../src/home-assistant/schemas.js';
@@ -373,7 +374,7 @@ describe('read-only observation context from real HA state and registries', () =
 		]);
 		expect(context?.states).toEqual([]);
 		if (result.selection.kind === 'ready') {
-			expect(result.selection.intentMode).toBe('mixed');
+			expect(result.selection.intentMode).toBe('observation_only');
 			expect(result.selection.reasons).toEqual(['observation']);
 		}
 	});
@@ -385,7 +386,7 @@ describe('read-only observation context from real HA state and registries', () =
 		expect(context?.states).toEqual([]);
 		expect(context?.observations.map((observation) => observation.entityId)).toEqual([entityId]);
 		if (result.selection.kind === 'ready') {
-			expect(result.selection.intentMode).toBe('mixed');
+			expect(result.selection.intentMode).toBe('observation_only');
 			expect(result.selection.requiresSetIntent).toBe(false);
 			expect(result.selection.setScopes).toEqual([]);
 		}
@@ -593,15 +594,15 @@ describe('read-only observation context from real HA state and registries', () =
 
 describe('observation evidence and existing deterministic execution boundaries', () => {
 	it('does not give an observation-only question permission to control lights', async () => {
-		const {result} = await run('Is anyone in the Living Room?', fixture(), [
-			{
-				entityId: 'light.example_living_first',
-				action: 'turn_off',
-				reason: 'The model invented a change from occupancy alone.',
-			},
-		]);
-		expect(result.validatedPlan.rejectedActions[0]?.reason).toBe('not_in_context');
-		expect(result.executionReadiness.commands).toEqual([]);
+		await expect(
+			run('Is anyone in the Living Room?', fixture(), [
+				{
+					entityId: 'light.example_living_first',
+					action: 'turn_off',
+					reason: 'The model invented a change from occupancy alone.',
+				},
+			]),
+		).rejects.toBeInstanceOf(ZodError);
 	});
 	it('allows a semantic area light set alongside actual HA evidence, expands every permitted member, and leaves another occupied area unchanged', async () => {
 		const input = fixture();
@@ -652,8 +653,8 @@ describe('observation evidence and existing deterministic execution boundaries',
 		'rejects a malformed actionable proposal for %s before command construction',
 		async (entityId) => {
 			const instruction = entityId.startsWith('sensor')
-				? 'What is the Living Room temperature?'
-				: 'Is the Living Room occupied?';
+				? 'Turn off Living Room lights if the temperature is below 18'
+				: 'Turn off Living Room lights if unoccupied';
 			const {result} = await run(instruction, fixture(), [
 				{entityId, action: 'turn_off', reason: 'Untrusted model proposal.'},
 			]);

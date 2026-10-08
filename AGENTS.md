@@ -138,6 +138,9 @@ context IDs, semantic set scopes, and readiness. Observations expose no supporte
 routing; allowing observation exposure never grants control. Reject missing/invalid required evidence
 or over-budget complete context without silently trimming it. Evidence is a planning snapshot, not a
 fresh execution condition check. See `docs/architecture.md` for the observation boundary.
+Observation-only contexts use `observation_only` mode with no advertised set scopes. Generation and
+response validation permit only `no_action`/`insufficient_context` and structurally empty actions;
+retain the existing actionable intent modes and post-model policy/readiness gates for control requests.
 
 The planning CLI remains read-only and stops at execution-ready commands. Deliberate execution uses
 `executeReadyCommands()` to freshly authorize commands, dispatch only `DispatchAuthorizedCommand`

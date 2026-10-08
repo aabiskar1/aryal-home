@@ -1,6 +1,6 @@
 import type {NormalizedEntityState} from '../home-assistant/state-normalizer.js';
 import {getSupportedActions} from '../home-assistant/capabilities.js';
-import {planningRequestBytes} from './planner.js';
+import {getPlanningIntentMode, planningRequestBytes} from './planner.js';
 import type {SetScopeContext} from './intents.js';
 import type {PlanningIntentMode} from './schemas.js';
 import {isObservationCandidate, toObservationState, type ObservationState} from './observations.js';
@@ -433,7 +433,13 @@ export const selectRelevantContext = (
 		!isSingleTarget &&
 		hasBroadScope(normalizedInstruction, candidates) &&
 		Object.values(domainTerms).some((terms) => hasAnyPhrase(normalizedInstruction, terms));
-	const intentMode = isSingleTarget ? 'entity_only' : requiresSetIntent ? 'set_only' : 'mixed';
+	const intentMode = getPlanningIntentMode({
+		instruction,
+		states,
+		observations,
+		setScopes: scopeCatalogue,
+		intentMode: isSingleTarget ? 'entity_only' : requiresSetIntent ? 'set_only' : 'mixed',
+	});
 	const requestBytes = planningRequestBytes(
 		{instruction, states, observations, setScopes: scopeCatalogue, intentMode},
 		options.model,
@@ -451,7 +457,7 @@ export const selectRelevantContext = (
 		reasons: [states.length === 0 ? 'observation' : choice.reason],
 		requestBytes,
 		setScopes: scopeCatalogue,
-		requiresSetIntent,
+		requiresSetIntent: intentMode === 'set_only',
 		intentMode,
 	};
 };

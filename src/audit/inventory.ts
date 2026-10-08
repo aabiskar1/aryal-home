@@ -7,6 +7,7 @@ import {isObservationCandidate, toObservationState} from '../planning/observatio
 import {resolveEntityPolicy} from '../policy/resolver.js';
 import type {EntityPolicy} from '../policy/schemas.js';
 import type {AuditData} from './collection.js';
+import {configuredPolicyTargets, isAuditRelevant} from './relevance.js';
 
 export type AuditEntity = {
 	entityId: string;
@@ -31,6 +32,7 @@ export type AuditEntity = {
 	observationSupported: boolean;
 	observationNormalizable: boolean;
 	policyPermitted: boolean;
+	aryalRelevant: boolean;
 };
 
 export type AuditInventory = {
@@ -126,7 +128,11 @@ export const buildAuditInventory = (data: AuditData): AuditInventory => {
 	const entries = new Map(registries.entities.map((entry) => [entry.entity_id, entry]));
 	const devices = new Map(registries.devices.map((entry) => [entry.id, entry]));
 	const areas = new Map(registries.areas.map((entry) => [entry.area_id, entry.name]));
-	const entities = discovered.map((entity): AuditEntity => {
+	const configuredTargets = configuredPolicyTargets(
+		discovered,
+		policy ?? {version: 1, allow: [], deny: []},
+	);
+	const entities = discovered.map((entity): Omit<AuditEntity, 'aryalRelevant'> => {
 		const entry = entries.get(entity.entityId);
 		const device = devices.get(entry?.device_id ?? '');
 		const parent = devices.get(device?.parent_device_id ?? '');
@@ -160,7 +166,9 @@ export const buildAuditInventory = (data: AuditData): AuditInventory => {
 	});
 
 	return {
-		entities: entities.toSorted((left, right) => compareText(left.entityId, right.entityId)),
+		entities: entities
+			.map((entity) => ({...entity, aryalRelevant: isAuditRelevant(entity, configuredTargets)}))
+			.toSorted((left, right) => compareText(left.entityId, right.entityId)),
 		stateEntityIds,
 		devicesScanned: registries.devices.length,
 		areasScanned: registries.areas.length,

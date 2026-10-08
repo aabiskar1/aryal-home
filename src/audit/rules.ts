@@ -40,18 +40,23 @@ const findingFor = (entity: AuditEntity, finding: EntityFinding): AuditFinding =
 		parentDeviceArea: entity.parentDeviceArea,
 		areaSource: entity.areaSource,
 		state: entity.state,
+		aryalRelevant: entity.aryalRelevant,
+		policyPermitted: entity.policyPermitted,
 		...finding.details,
 	},
 	reason: finding.reason,
 	suggestion: finding.suggestion,
 });
 
+const relevantSeverity = (entity: AuditEntity): 'warn' | 'info' =>
+	entity.aryalRelevant ? 'warn' : 'info';
+
 const areaFindings = (entity: AuditEntity): AuditFinding[] => {
 	const findings: AuditFinding[] = [];
 	if (!entity.metadataComplete) {
 		findings.push(
 			findingFor(entity, {
-				severity: 'error',
+				severity: relevantSeverity(entity),
 				code: 'incomplete_metadata',
 				reason: 'Registry references are incomplete; runtime policy excludes this entity.',
 				suggestion:
@@ -64,7 +69,7 @@ const areaFindings = (entity: AuditEntity): AuditFinding[] => {
 	) {
 		findings.push(
 			findingFor(entity, {
-				severity: 'warn',
+				severity: relevantSeverity(entity),
 				code: 'missing_area',
 				reason:
 					'Supported entity has no effective registry area and cannot participate in area-based reasoning.',
@@ -86,7 +91,7 @@ const areaFindings = (entity: AuditEntity): AuditFinding[] => {
 	) {
 		findings.push(
 			findingFor(entity, {
-				severity: 'warn',
+				severity: relevantSeverity(entity),
 				code: 'entity_device_area_mismatch',
 				reason:
 					'The entity area overrides a different direct device area. This may be intentional.',
@@ -113,12 +118,31 @@ const stateFindings = (entity: AuditEntity): AuditFinding[] => {
 	} else if (entity.state === 'unavailable' || entity.state === 'unknown') {
 		findings.push(
 			findingFor(entity, {
-				severity: 'warn',
+				severity: relevantSeverity(entity),
 				code: 'unusable_current_state',
 				reason:
 					'Home Assistant currently reports unavailable or unknown; runtime policy excludes this state.',
 				suggestion:
 					'Check the device and integration in Home Assistant before relying on this entity.',
+			}),
+		);
+	}
+
+	if (
+		entity.hasCurrentState &&
+		entity.observationSupported &&
+		!entity.observationNormalizable &&
+		!['unknown', 'unavailable'].includes(entity.state)
+	) {
+		findings.push(
+			findingFor(entity, {
+				severity: relevantSeverity(entity),
+				code: 'unusable_observation_state',
+				reason:
+					'The supported observation cannot be normalized as binary on/off or a finite numeric reading.',
+				suggestion:
+					'Review the device class and reading in Home Assistant before relying on this evidence.',
+				details: {deviceClass: entity.deviceClass},
 			}),
 		);
 	}
@@ -156,7 +180,7 @@ const nameFindings = (entity: AuditEntity): AuditFinding[] => {
 	if (entity.name !== undefined && genericNames.has(nameKey(entity.name))) {
 		findings.push(
 			findingFor(entity, {
-				severity: 'warn',
+				severity: relevantSeverity(entity),
 				code: 'generic_friendly_name',
 				reason: 'The friendly name is exactly a generic entity or observation class name.',
 				suggestion:
@@ -176,7 +200,7 @@ const nameFindings = (entity: AuditEntity): AuditFinding[] => {
 	if (entity.supportedActions.length > 0 && terms.length > 0) {
 		findings.push(
 			findingFor(entity, {
-				severity: 'warn',
+				severity: entity.policyPermitted ? 'warn' : 'info',
 				code: 'suspicious_actionable_name',
 				reason:
 					'A whole name/identifier token suggests a status, indicator, diagnostic, or debug control. This is a review hint, not a safety classification.',
@@ -294,10 +318,15 @@ const duplicateNameFindings = (entities: AuditEntity[]): AuditFinding[] => {
 			continue;
 		}
 
+		const relevantMembers = group.filter((entity) => entity.aryalRelevant);
+		const ambiguityEntityIds = relevantMembers
+			.map((entity) => entity.entityId)
+			.toSorted(compareText);
+
 		for (const entity of group) {
 			findings.push(
 				findingFor(entity, {
-					severity: 'warn',
+					severity: entity.aryalRelevant && relevantMembers.length > 1 ? 'warn' : 'info',
 					code: 'duplicate_friendly_name',
 					reason:
 						'Different entity IDs share the same friendly name after case/Unicode/whitespace normalization.',
@@ -306,6 +335,7 @@ const duplicateNameFindings = (entities: AuditEntity[]): AuditFinding[] => {
 					details: {
 						match: group.every((member) => member.name === entity.name) ? 'exact' : 'normalized',
 						entityIds: group.map((member) => member.entityId).toSorted(compareText),
+						ambiguityEntityIds,
 					},
 				}),
 			);
@@ -330,8 +360,11 @@ const deviceAreaFindings = (entities: AuditEntity[]): AuditFinding[] => {
 			continue;
 		}
 
+		const relevantMembers = group.filter((entity) => entity.aryalRelevant);
+		const relevantAreaIds = new Set(relevantMembers.map((entity) => entity.areaId));
+
 		findings.push({
-			severity: 'warn',
+			severity: relevantAreaIds.size > 1 ? 'warn' : 'info',
 			code: 'device_entities_multiple_areas',
 			deviceId,
 			details: {
@@ -339,6 +372,9 @@ const deviceAreaFindings = (entities: AuditEntity[]): AuditFinding[] => {
 					...new Set(group.flatMap((entity) => (entity.area === undefined ? [] : [entity.area]))),
 				].toSorted(compareText),
 				entityIds: group.map((entity) => entity.entityId).toSorted(compareText),
+				aryalRelevantEntityIds: relevantMembers
+					.map((entity) => entity.entityId)
+					.toSorted(compareText),
 			},
 			reason:
 				'Entities attached to the same direct device have different effective registry areas. Overrides may be intentional.',

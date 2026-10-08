@@ -48,7 +48,10 @@ export const formatAuditReport = (
 
 	const {summary} = safeReport;
 	const routineCodes = new Set(['registry_disabled', 'registry_entity_without_state']);
-	const detailedFindings = safeReport.findings.filter((finding) => !routineCodes.has(finding.code));
+	const severityOrder = {error: 0, warn: 1, info: 2};
+	const detailedFindings = safeReport.findings
+		.filter((finding) => !routineCodes.has(finding.code))
+		.toSorted((left, right) => severityOrder[left.severity] - severityOrder[right.severity]);
 	const routineSummary = [...routineCodes].map(
 		(code) => `${code}=${safeReport.findings.filter((finding) => finding.code === code).length}`,
 	);

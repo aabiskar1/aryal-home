@@ -407,14 +407,286 @@ describe('deterministic Home Assistant metadata audit', () => {
 	});
 });
 
+describe('ARYAL-relevant audit severity', () => {
+	it.each(['not_allowed', 'denied', 'registry_only', 'disabled'])(
+		'retains missing-area information for a %s switch without warning',
+		(exclusion) => {
+			const data = fixture([state('switch.example_addon', 'Example Add-on')]);
+			registries(data).devices[0]!.area_id = null;
+			switch (exclusion) {
+				case 'not_allowed': {
+					data.policy = {version: 1, allow: [{domain: 'light'}], deny: []};
+
+					break;
+				}
+
+				case 'denied': {
+					data.policy!.deny = [{entityId: 'switch.example_addon'}];
+
+					break;
+				}
+
+				case 'registry_only': {
+					data.states = [];
+
+					break;
+				}
+
+				default: {
+					registries(data).entities[0]!.disabled_by = 'integration';
+				}
+			}
+
+			expect(findings(data, 'missing_area')[0]).toMatchObject({
+				severity: 'info',
+				details: {policyPermitted: false, aryalRelevant: false},
+			});
+			expect(report(data).summary.warnings).toBe(0);
+			expect(formatAuditReport(report(data), true)).toContain('"code": "missing_area"');
+		},
+	);
+
+	it('keeps a permitted room light missing an area worth reviewing', () => {
+		const data = fixture();
+		registries(data).devices[0]!.area_id = null;
+		expect(findings(data, 'missing_area')[0]).toMatchObject({
+			severity: 'warn',
+			details: {policyPermitted: true, aryalRelevant: true},
+		});
+	});
+
+	it('downgrades unexposed observation metadata without changing exposure', () => {
+		const data = fixture([
+			state('sensor.example_temperature', 'Example Temperature', '21', 'temperature'),
+		]);
+		data.policy = {version: 1, allow: [{domain: 'light'}], deny: []};
+		registries(data).devices[0]!.area_id = null;
+		expect(findings(data, 'missing_area')[0]?.severity).toBe('info');
+		expect(findings(data, 'observation_readiness')[0]?.details).toMatchObject({
+			policyExposed: false,
+			eligibleForPlanning: false,
+			aryalRelevant: false,
+		});
+	});
+
+	it.each([
+		state('light.example_lamp', 'Example Lamp', 'unknown'),
+		state('switch.example_switch', 'Example Switch', 'unavailable'),
+		state('binary_sensor.example_presence', 'Example Presence', 'unknown', 'presence'),
+		state('sensor.example_temperature', 'Example Temperature', 'unavailable', 'temperature'),
+	])('warns about configured but unusable $entity_id without granting permission', (reading) => {
+		const data = fixture([reading]);
+		const before = JSON.stringify(data);
+		expect(findings(data, 'unusable_current_state')[0]).toMatchObject({
+			severity: 'warn',
+			details: {aryalRelevant: true, policyPermitted: false},
+		});
+		expect(buildAuditInventory(data).entities[0]?.policyPermitted).toBe(false);
+		expect(JSON.stringify(data)).toBe(before);
+	});
+
+	it.each(['button', 'notify', 'scene', 'conversation', 'tts', 'ai_task', 'device_tracker'])(
+		'keeps unknown-state %s inventory facts informational even with an allow selector',
+		(domain) => {
+			const data = fixture([state(`${domain}.example_entity`, 'Example Entity', 'unknown')]);
+			data.policy = {version: 1, allow: [{domain}], deny: []};
+			expect(findings(data, 'unusable_current_state')[0]).toMatchObject({
+				severity: 'info',
+				details: {aryalRelevant: false},
+			});
+			expect(report(data).summary.warnings).toBe(0);
+		},
+	);
+
+	it.each(['not_allowed', 'denied', 'disabled'])(
+		'keeps an unavailable %s light informational',
+		(exclusion) => {
+			const data = fixture([state('light.example_lamp', 'Example Lamp', 'unavailable')]);
+			if (exclusion === 'not_allowed') {
+				data.policy = {version: 1, allow: [], deny: []};
+			} else if (exclusion === 'denied') {
+				data.policy!.deny = [{domain: 'light'}];
+			} else {
+				registries(data).devices[0]!.disabled_by = 'user';
+			}
+
+			expect(findings(data, 'unusable_current_state')[0]?.severity).toBe('info');
+		},
+	);
+
+	it.each(['warm', 'NaN', 'on'])(
+		'warns about invalid exposed temperature %s while retaining read-only readiness',
+		(value) => {
+			const data = fixture([
+				state('sensor.example_temperature', 'Example Temperature', value, 'temperature'),
+			]);
+			expect(findings(data, 'unusable_observation_state')[0]?.severity).toBe('warn');
+			expect(findings(data, 'observation_readiness')[0]?.details).toMatchObject({
+				normalizable: false,
+				eligibleForPlanning: false,
+			});
+			expect(buildAuditInventory(data).entities[0]?.supportedActions).toEqual([]);
+			data.policy = {version: 1, allow: [], deny: []};
+			expect(findings(data, 'unusable_observation_state')[0]?.severity).toBe('info');
+		},
+	);
+
+	it.each([
+		{
+			readings: [
+				state('binary_sensor.example_status', 'Example Status', 'on', 'connectivity'),
+				state('sensor.example_status', 'Example Status', '1', 'energy'),
+			],
+		},
+		{
+			readings: [
+				state('device_tracker.example_phone', 'Example Phone'),
+				state('notify.example_phone', 'Example Phone'),
+			],
+		},
+		{
+			readings: [
+				state('light.example_lamp', 'Example Lamp'),
+				state('notify.example_lamp', 'Example Lamp'),
+			],
+		},
+	])('retains expected cross-domain duplicate groups as INFO: $readings', ({readings}) => {
+		const data = fixture(readings);
+		const duplicates = findings(data, 'duplicate_friendly_name');
+		expect(duplicates).toHaveLength(2);
+		expect(duplicates.every(({severity}) => severity === 'info')).toBe(true);
+		expect(duplicates[0]?.details.entityIds).toHaveLength(2);
+	});
+
+	it('keeps ambiguous configured lights WARN including an unavailable member, while unrelated members stay INFO', () => {
+		const data = fixture([
+			state('light.example_first', 'Example Room Light'),
+			state('light.example_second', 'Example Room Light', 'unavailable'),
+			state('notify.example_light', 'Example Room Light'),
+		]);
+		const duplicates = findings(data, 'duplicate_friendly_name');
+		expect(duplicates.map(({entityId, severity}) => ({entityId, severity}))).toEqual([
+			{entityId: 'light.example_first', severity: 'warn'},
+			{entityId: 'light.example_second', severity: 'warn'},
+			{entityId: 'notify.example_light', severity: 'info'},
+		]);
+		expect(duplicates[0]?.details).toMatchObject({
+			entityIds: ['light.example_first', 'light.example_second', 'notify.example_light'],
+			ambiguityEntityIds: ['light.example_first', 'light.example_second'],
+		});
+		expect(findings(data, 'unusable_current_state')[0]?.severity).toBe('warn');
+	});
+
+	it('warns for duplicate exposed observations, but not when only one is exposed', () => {
+		const data = fixture([
+			state('sensor.example_first', 'Example Reading', '21', 'temperature'),
+			state('sensor.example_second', 'Example Reading', '45', 'humidity'),
+		]);
+		expect(findings(data, 'duplicate_friendly_name').map(({severity}) => severity)).toEqual([
+			'warn',
+			'warn',
+		]);
+		data.policy!.deny = [{entityId: 'sensor.example_second'}];
+		expect(findings(data, 'duplicate_friendly_name').map(({severity}) => severity)).toEqual([
+			'info',
+			'info',
+		]);
+	});
+
+	it.each(['not_allowed', 'unavailable', 'disabled'])(
+		'keeps suspicious status-light hints informational when %s',
+		(exclusion) => {
+			const data = fixture([
+				state(
+					'light.example_status_light',
+					'Example Status Light',
+					exclusion === 'unavailable' ? 'unavailable' : 'on',
+				),
+			]);
+			if (exclusion === 'not_allowed') {
+				data.policy = {version: 1, allow: [], deny: []};
+			} else if (exclusion === 'disabled') {
+				registries(data).entities[0]!.disabled_by = 'user';
+			}
+
+			expect(findings(data, 'suspicious_actionable_name')[0]?.severity).toBe('info');
+		},
+	);
+
+	it('does not elevate device-wide area conflicts caused only by an unrelated member', () => {
+		const data = fixture([
+			state('light.example_lamp'),
+			state('switch.example_addon', 'Example Add-on'),
+		]);
+		data.policy = {version: 1, allow: [{domain: 'light'}], deny: []};
+		registries(data).entities[1]!.area_id = 'example_other';
+		expect(findings(data, 'entity_device_area_mismatch')[0]?.severity).toBe('info');
+		expect(findings(data, 'device_entities_multiple_areas')[0]).toMatchObject({
+			severity: 'info',
+			details: {aryalRelevantEntityIds: ['light.example_lamp']},
+		});
+		data.policy.allow.push({domain: 'switch'});
+		expect(findings(data, 'entity_device_area_mismatch')[0]?.severity).toBe('warn');
+		expect(findings(data, 'device_entities_multiple_areas')[0]?.severity).toBe('warn');
+	});
+
+	it('warns for incomplete metadata on an explicit configured target without authorizing it', () => {
+		const data = fixture();
+		data.policy = {version: 2, allow: [{entityId: 'light.example_lamp'}], deny: []};
+		registries(data).devices = [];
+		const before = JSON.stringify(data);
+		expect(findings(data, 'incomplete_metadata')[0]).toMatchObject({
+			severity: 'warn',
+			details: {aryalRelevant: true, policyPermitted: false},
+		});
+		expect(JSON.stringify(data)).toBe(before);
+		data.policy.deny = [{labelId: 'example_critical'}];
+		expect(findings(data, 'incomplete_metadata')[0]?.severity).toBe('info');
+		data.policy = {version: 2, allow: [{areaId: 'example_room'}], deny: []};
+		expect(findings(data, 'incomplete_metadata')[0]?.severity).toBe('info');
+	});
+
+	it.each([{areaId: 'example_room'}, {deviceId: 'example_device'}, {labelId: 'example_label'}])(
+		'reuses registry selector matching for an unavailable configured target: %j',
+		(selector) => {
+			const data = fixture([state('light.example_lamp', 'Example Lamp', 'unavailable')]);
+			registries(data).entities[0]!.labels = ['example_label'];
+			registries(data).labels = [{label_id: 'example_label'}];
+			data.policy = {version: 2, allow: [selector], deny: []};
+			expect(findings(data, 'unusable_current_state')[0]?.severity).toBe('warn');
+			data.policy.deny = [selector];
+			expect(findings(data, 'unusable_current_state')[0]?.severity).toBe('info');
+		},
+	);
+
+	it('prioritizes human warnings while keeping all INFO and stable JSON inventory facts', () => {
+		const data = fixture([
+			state('switch.example_addon', 'Example Add-on'),
+			state('light.example_status', 'Example Status Light'),
+		]);
+		data.policy = {version: 1, allow: [{domain: 'light'}], deny: []};
+		registries(data).devices[0]!.area_id = null;
+		const result = report(data);
+		const human = formatAuditReport(result, false);
+		expect(human.indexOf('[WARN]')).toBeLessThan(human.indexOf('[INFO]'));
+		expect(human.lastIndexOf('[WARN]')).toBeLessThan(human.indexOf('[INFO]'));
+		const json = JSON.parse(formatAuditReport(result, true)) as AuditReport;
+		expect(json.findings).toHaveLength(result.findings.length);
+		expect(
+			json.findings.filter(({code}) => code === 'missing_area').map(({severity}) => severity),
+		).toEqual(['warn', 'info']);
+	});
+});
+
 describe('read-only audit CLI', () => {
-	it('completes with exit 0 even when warnings and error findings exist', async () => {
+	it('completes with exit 0 even when metadata warnings exist', async () => {
 		const data = fixture();
 		registries(data).devices = [];
 		const result = await runHaAuditCli(['--json'], async () => data);
 		expect(result.exitCode).toBe(0);
 		const parsed = JSON.parse(result.output) as AuditReport;
-		expect(parsed.summary.errors).toBe(1);
+		expect(parsed.summary.errors).toBe(0);
+		expect(parsed.summary.warnings).toBe(1);
 	});
 
 	it.each([{args: []}, {args: ['--json']}])(

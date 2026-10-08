@@ -45,7 +45,6 @@ const presenceTerms = [
 	'anyone',
 	'anybody',
 	'someone',
-	'nobody',
 	'no one',
 	'who is home',
 	'presence',
@@ -170,9 +169,17 @@ const areaCandidates = (
 
 type ObservationProfile = 'presence' | 'temperature' | 'humidity';
 
+// Tokenization already maps "no-one" to "no one". Canonicalize the remaining variants
+// only for evidence matching, without changing entity/area matching or the model instruction.
+const normalizePresenceLanguage = (instruction: string): string =>
+	instruction
+		.split(' ')
+		.map((word) => (word === 'noone' || word === 'nobody' ? 'no one' : word))
+		.join(' ');
+
 const observationProfiles = (instruction: string): ObservationProfile[] => {
 	const profiles: ObservationProfile[] = [];
-	if (hasAnyPhrase(instruction, presenceTerms)) {
+	if (hasAnyPhrase(normalizePresenceLanguage(instruction), presenceTerms)) {
 		profiles.push('presence');
 	}
 

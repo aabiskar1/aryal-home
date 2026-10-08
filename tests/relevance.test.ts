@@ -181,6 +181,92 @@ describe('selectRelevantContext', () => {
 		expect(selectedIds('Is anyone home?')).toEqual(['binary_sensor.example_occupancy']);
 	});
 
+	it.each(['No one', 'No-one', 'Noone', 'Nobody'])(
+		'selects the same presence evidence for %s without changing action scope',
+		(variant) => {
+			const input = [
+				candidate('light.example_hall', 'Hall Light', 'Hall'),
+				candidate('binary_sensor.example_occupancy', 'Occupancy', 'Hall', {
+					deviceClass: 'occupancy',
+				}),
+				candidate('binary_sensor.example_presence', 'Presence', 'Hall', {
+					deviceClass: 'presence',
+				}),
+			];
+			const instruction = `${variant} is at home. The lights are on.`;
+			const result = selectRelevantContext(instruction, input, options);
+			expect(result.kind).toBe('ready');
+			if (result.kind === 'ready') {
+				expect(result.observations.map(({entityId}) => entityId)).toEqual([
+					'binary_sensor.example_occupancy',
+					'binary_sensor.example_presence',
+				]);
+				expect([...result.contextEntityIds]).toEqual(['light.example_hall']);
+				expect(result.intentMode).toBe('mixed');
+				expect(result.requiresSetIntent).toBe(false);
+				expect(result.requestBytes).toBe(
+					planningRequestBytes(
+						{
+							instruction,
+							states: result.states,
+							observations: result.observations,
+							setScopes: result.setScopes,
+							intentMode: result.intentMode,
+						},
+						options.model,
+					),
+				);
+			}
+		},
+	);
+
+	it.each(['noon', 'nooner', 'noones', 'nobodyelse', 'anobody', 'nooneé', 'énoone', 'no ones'])(
+		'does not infer presence relevance from the lookalike %s',
+		(word) => {
+			const result = selectRelevantContext(
+				`${word} is at home. The lights are on.`,
+				candidates,
+				options,
+			);
+			expect(result.kind).toBe('ready');
+			if (result.kind === 'ready') {
+				expect(result.observations).toEqual([]);
+			}
+		},
+	);
+
+	it.each(['no one', 'no-one', 'noone', 'nobody'])(
+		'keeps %s questions observation-only',
+		(variant) => {
+			const result = selectRelevantContext(`Is ${variant} at home?`, candidates, options);
+			expect(result).toMatchObject({
+				kind: 'ready',
+				states: [],
+				intentMode: 'observation_only',
+				setScopes: [],
+				requiresSetIntent: false,
+			});
+			if (result.kind === 'ready') {
+				expect(result.observations.map(({entityId}) => entityId)).toEqual([
+					'binary_sensor.example_occupancy',
+				]);
+				expect(result.contextEntityIds.size).toBe(0);
+			}
+		},
+	);
+
+	it('does not interpret noone inside an explicit entity ID as evidence language', () => {
+		const result = selectRelevantContext(
+			'Turn off light.example_noone',
+			[candidate('light.example_noone', 'Example Light', 'Hall'), ...candidates],
+			options,
+		);
+		expect(result).toMatchObject({kind: 'ready', intentMode: 'entity_only', observations: []});
+		if (result.kind === 'ready') {
+			expect([...result.contextEntityIds]).toEqual(['light.example_noone']);
+		}
+	});
+
 	it('keeps weather and person entities out of the narrow observation context', () => {
 		const result = selectRelevantContext('Review permitted entities', candidates, options);
 		expect(result.kind).toBe('ready');

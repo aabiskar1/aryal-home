@@ -138,6 +138,68 @@ const fixtureWithUnassignedLight = (
 		},
 	);
 
+describe('presence-language normalization in planning', () => {
+	it.each(['No one', 'No-one', 'Noone', 'Nobody'])(
+		'supplies evidence for %s without inventing a control proposal',
+		async (variant) => {
+			const instruction = `${variant} is at home. The lights are on.`;
+			const {result, context, request} = await run(instruction);
+			expect(result.selection).toMatchObject({kind: 'ready', intentMode: 'mixed'});
+			expect(context?.observations.map(({deviceClass}) => deviceClass)).toEqual([
+				'occupancy',
+				'presence',
+				'occupancy',
+			]);
+			expect(
+				context?.observations.every((observation) => !('supportedActions' in observation)),
+			).toBe(true);
+			expect(request?.messages[1]?.content).toContain(JSON.stringify(instruction));
+			expect(result.validatedPlan).toMatchObject({outcome: 'no_action', actions: []});
+			expect(result.executionReadiness.commands).toEqual([]);
+		},
+	);
+
+	it.each(['no one', 'no-one', 'noone', 'nobody'])(
+		'preserves complete conditional set expansion for %s',
+		async (variant) => {
+			const {result, context} = await run(
+				`Turn off Living Room lights if ${variant} is there`,
+				fixture(),
+				[lightSetIntent],
+			);
+			expect(result.selection).toMatchObject({kind: 'ready', intentMode: 'mixed'});
+			expect(context?.observations.map(({entityId}) => entityId)).toEqual([
+				'binary_sensor.example_living_occupancy',
+				'binary_sensor.example_living_presence',
+			]);
+			expect(result.intentExpansion.sets[0]?.matchedCount).toBe(3);
+			expect(result.intentExpansion.outcome).toBe('complete');
+			expect(result.executionReadiness.commands.map(({target}) => target.entity_id)).toEqual([
+				'light.example_living_first',
+				'light.example_living_second',
+			]);
+		},
+	);
+
+	it('fails closed when a noone condition has no permitted presence evidence', async () => {
+		const {result, chat} = await run(
+			'Turn off Living Room lights if noone is there',
+			fixture(
+				defaultStates.filter(
+					({attributes}) => !['occupancy', 'presence'].includes(String(attributes.device_class)),
+				),
+			),
+			[lightSetIntent],
+		);
+		expect(result.selection).toEqual({
+			kind: 'insufficient_context',
+			reason: 'missing_observations',
+		});
+		expect(chat).not.toHaveBeenCalled();
+		expect(result.executionReadiness.commands).toEqual([]);
+	});
+});
+
 describe('area-conditioned planning with permitted no-area lights', () => {
 	it.each(['Turn off lights in rooms that are unoccupied', conditionalGoal])(
 		'keeps complete room reasoning available for %s without including no-area targets',

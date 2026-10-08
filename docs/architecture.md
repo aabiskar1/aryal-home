@@ -1,5 +1,10 @@
 # Planning context and execution authority
 
+The separate [metadata audit](ha-audit.md) collects only current states, read-only registry lists,
+and local policy. Pure inventory projection and deterministic findings support maintenance without
+invoking model planning or execution. Audit suggestions grant no area, policy, or action authority
+and make no changes to Home Assistant or local policy.
+
 Home Assistant supplies current facts through validated REST state and registry metadata. A user
 supplies the goal. The local model combines selected, normalized facts with that goal and proposes
 structured entity or area/domain set intents. Deterministic application code owns permission,

@@ -18,7 +18,7 @@ const candidate = (
 		state: {
 			entityId,
 			domain,
-			state: 'on',
+			state: domain === 'sensor' ? '21' : 'on',
 			name,
 			area,
 			deviceClass: options.deviceClass,
@@ -51,7 +51,9 @@ const selectedIds = (instruction: string, input = candidates): string[] => {
 	const result = selectRelevantContext(instruction, input, options);
 	expect(result.kind).toBe('ready');
 
-	return result.kind === 'ready' ? result.states.map((state) => state.entityId) : [];
+	return result.kind === 'ready'
+		? [...result.states, ...result.observations].map((state) => state.entityId)
+		: [];
 };
 
 describe('selectRelevantContext', () => {
@@ -176,14 +178,16 @@ describe('selectRelevantContext', () => {
 	});
 
 	it('selects presence observations without treating motion as proof of presence', () => {
-		expect(selectedIds('Is anyone home?')).toEqual([
-			'person.example_person',
-			'binary_sensor.example_occupancy',
-		]);
+		expect(selectedIds('Is anyone home?')).toEqual(['binary_sensor.example_occupancy']);
 	});
 
-	it('selects weather observations', () => {
-		expect(selectedIds("What's the weather?")).toEqual(['weather.example_forecast']);
+	it('keeps weather and person entities out of the narrow observation context', () => {
+		const result = selectRelevantContext('Review permitted entities', candidates, options);
+		expect(result.kind).toBe('ready');
+		if (result.kind === 'ready') {
+			expect(result.observations).toEqual([]);
+			expect(result.states.every((state) => ['light', 'switch'].includes(state.domain))).toBe(true);
+		}
 	});
 
 	it('falls back to complete permitted context for ambiguous requests', () => {
@@ -192,7 +196,8 @@ describe('selectRelevantContext', () => {
 			expect(result.kind).toBe('ready');
 			if (result.kind === 'ready') {
 				expect(result.mode).toBe('fallback');
-				expect(result.states).toHaveLength(candidates.length);
+				expect(result.states).toHaveLength(4);
+				expect(result.observations).toEqual([]);
 			}
 		}
 	});
@@ -209,7 +214,7 @@ describe('selectRelevantContext', () => {
 		});
 		expect(selectRelevantContext('Is anyone home?', [candidates[8]!], options)).toEqual({
 			kind: 'insufficient_context',
-			reason: 'no_permitted_match',
+			reason: 'missing_observations',
 		});
 	});
 

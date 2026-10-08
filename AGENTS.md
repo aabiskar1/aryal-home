@@ -130,6 +130,17 @@ Implemented:
 - Separate instruction-only execution CLI using the existing planning pipeline and execution API
 - Semantic area/domain set intents with deterministic complete permitted-set expansion, shared
   post-model validation/readiness, and sanitized expansion diagnostics
+- Separate read-only occupancy/presence and temperature/humidity planning evidence, with existing
+  allow/deny exposure policy, deterministic area relevance, and complete request byte accounting
+
+Keep actionable `states` and read-only `observations` distinct. Only light/switch states enter action
+context IDs, semantic set scopes, and readiness. Observations expose no supported actions or service
+routing; allowing observation exposure never grants control. Reject missing/invalid required evidence
+or over-budget complete context without silently trimming it. Evidence is a planning snapshot, not a
+fresh execution condition check. See `docs/architecture.md` for the observation boundary.
+Observation-only contexts use `observation_only` mode with no advertised set scopes. Generation and
+response validation permit only `no_action`/`insufficient_context` and structurally empty actions;
+retain the existing actionable intent modes and post-model policy/readiness gates for control requests.
 
 The planning CLI remains read-only and stops at execution-ready commands. Deliberate execution uses
 `executeReadyCommands()` to freshly authorize commands, dispatch only `DispatchAuthorizedCommand`

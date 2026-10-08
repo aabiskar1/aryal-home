@@ -1,7 +1,9 @@
 import type {NormalizedEntityState} from '../home-assistant/state-normalizer.js';
-import {planningRequestBytes} from './planner.js';
+import {getSupportedActions} from '../home-assistant/capabilities.js';
+import {getPlanningIntentMode, planningRequestBytes} from './planner.js';
 import type {SetScopeContext} from './intents.js';
 import type {PlanningIntentMode} from './schemas.js';
+import {isObservationCandidate, toObservationState, type ObservationState} from './observations.js';
 
 export type RelevanceCandidate = {
 	state: NormalizedEntityState;
@@ -12,6 +14,7 @@ export type SelectionResult =
 	| {
 			kind: 'ready';
 			states: NormalizedEntityState[];
+			observations: ObservationState[];
 			contextEntityIds: ReadonlySet<string>;
 			mode: 'targeted' | 'broad' | 'fallback';
 			reasons: readonly string[];
@@ -22,7 +25,7 @@ export type SelectionResult =
 	  }
 	| {
 			kind: 'insufficient_context';
-			reason: 'no_permitted_match' | 'over_budget';
+			reason: 'no_permitted_match' | 'over_budget' | 'missing_observations';
 	  };
 
 export type SelectionOptions = {
@@ -38,9 +41,22 @@ const domainTerms = {
 	switch: ['switch', 'switches', 'plug', 'plugs', 'outlet', 'outlets'],
 } as const;
 
-const presenceTerms = ['anyone home', 'someone home', 'who is home', 'presence', 'occupancy'];
+const presenceTerms = [
+	'anyone',
+	'anybody',
+	'someone',
+	'nobody',
+	'no one',
+	'who is home',
+	'presence',
+	'occupancy',
+	'occupied',
+	'unoccupied',
+	'empty',
+	'vacant',
+];
 const temperatureTerms = ['temperature', 'temperatures', 'temp'];
-const weatherTerms = ['weather', 'forecast'];
+const humidityTerms = ['humidity', 'humid'];
 const broadTerms = ['all', 'every', 'each', 'whole', 'entire'];
 const actionTerms = new Set([
 	'turn',
@@ -152,56 +168,29 @@ const areaCandidates = (
 	);
 };
 
-const observationProfile = (
-	instruction: string,
-): 'presence' | 'temperature' | 'weather' | undefined => {
+type ObservationProfile = 'presence' | 'temperature' | 'humidity';
+
+const observationProfiles = (instruction: string): ObservationProfile[] => {
+	const profiles: ObservationProfile[] = [];
 	if (hasAnyPhrase(instruction, presenceTerms)) {
-		return 'presence';
+		profiles.push('presence');
 	}
 
 	if (hasAnyPhrase(instruction, temperatureTerms)) {
-		return 'temperature';
+		profiles.push('temperature');
 	}
 
-	if (hasAnyPhrase(instruction, weatherTerms)) {
-		return 'weather';
+	if (hasAnyPhrase(instruction, humidityTerms)) {
+		profiles.push('humidity');
 	}
 
-	return undefined;
+	return profiles;
 };
 
-const isObservationMatch = (
-	candidate: RelevanceCandidate,
-	profile: 'presence' | 'temperature' | 'weather',
-): boolean => {
-	const {state} = candidate;
-	if (state.supportedActions.length > 0) {
-		return false;
-	}
-
-	switch (profile) {
-		case 'presence': {
-			return (
-				state.domain === 'person' ||
-				state.domain === 'device_tracker' ||
-				(state.domain === 'binary_sensor' &&
-					(state.deviceClass === 'presence' || state.deviceClass === 'occupancy'))
-			);
-		}
-
-		case 'temperature': {
-			return (
-				state.domain === 'sensor' &&
-				(state.deviceClass === 'temperature' ||
-					hasAnyPhrase(normalize(`${state.name ?? ''} ${state.entityId}`), temperatureTerms))
-			);
-		}
-
-		case 'weather': {
-			return state.domain === 'weather';
-		}
-	}
-};
+const hasProfile = (deviceClass: string | undefined, profile: ObservationProfile): boolean =>
+	profile === 'presence'
+		? deviceClass === 'occupancy' || deviceClass === 'presence'
+		: deviceClass === profile;
 
 const hasUnresolvedQualifier = (instruction: string): boolean => {
 	if (!/^(?:turn on|turn off|switch on|switch off|enable|disable) /v.test(instruction)) {
@@ -214,6 +203,10 @@ const hasUnresolvedQualifier = (instruction: string): boolean => {
 const exactEntityIds = (instruction: string): string[] =>
 	instruction.match(/\b\w+\.\w+\b/giv) ?? [];
 
+// Entity ID words are metadata, not evidence vocabulary, action intent, or scope quantifiers.
+const instructionText = (instruction: string): string =>
+	normalize(instruction.replaceAll(/\b\w+\.\w+\b/giv, ' '));
+
 type CandidateChoice = {
 	selected: RelevanceCandidate[];
 	mode: 'targeted' | 'broad' | 'fallback';
@@ -223,8 +216,11 @@ type CandidateChoice = {
 const chooseCandidates = (
 	instruction: string,
 	candidates: RelevanceCandidate[],
+	hasEvidenceTarget: boolean,
 ): CandidateChoice => {
-	const explicitIds = exactEntityIds(instruction);
+	const explicitIds = exactEntityIds(instruction).filter(
+		(id) => getSupportedActions(id.split('.', 1)[0]!.toLowerCase()).length > 0,
+	);
 	if (explicitIds.length > 0) {
 		return {
 			selected: candidates.filter((candidate) =>
@@ -235,14 +231,13 @@ const chooseCandidates = (
 		};
 	}
 
-	const normalizedInstruction = normalize(instruction);
+	const normalizedInstruction = instructionText(instruction);
 	const areas = areaCandidates(normalizedInstruction, candidates);
 	const isBroad = hasBroadScope(normalizedInstruction, candidates);
 	const exactNames = candidates.filter(
 		(candidate) =>
 			candidate.state.name !== undefined && hasPhrase(normalizedInstruction, candidate.state.name),
 	);
-	const profile = observationProfile(normalizedInstruction);
 	const hasPluralDomain = hasAnyPhrase(normalizedInstruction, [
 		'lights',
 		'lamps',
@@ -250,30 +245,15 @@ const chooseCandidates = (
 		'plugs',
 		'outlets',
 	]);
-	if (
-		exactNames.length > 0 &&
-		!isBroad &&
-		profile === undefined &&
-		!(areas.length > 0 && hasPluralDomain)
-	) {
+	if (exactNames.length > 0 && !isBroad && !(areas.length > 0 && hasPluralDomain)) {
 		return {selected: exactNames, mode: 'targeted', reason: 'friendly_name'};
 	}
 
 	const domains = Object.entries(domainTerms)
 		.filter(([, terms]) => hasAnyPhrase(normalizedInstruction, terms))
 		.map(([domain]) => domain);
-
-	if (profile !== undefined) {
-		const scope = areas.length > 0 ? areas : candidates;
-
-		return {
-			selected: scope.filter(
-				(candidate) =>
-					isObservationMatch(candidate, profile) || domains.includes(candidate.state.domain),
-			),
-			mode: 'targeted',
-			reason: `observation_${profile}`,
-		};
+	if (domains.length === 0 && hasEvidenceTarget) {
+		return {selected: [], mode: 'targeted', reason: 'observation'};
 	}
 
 	if (areas.length > 0) {
@@ -299,7 +279,7 @@ const chooseCandidates = (
 	}
 
 	if (domains.length > 0) {
-		if (!isBroad && hasUnresolvedQualifier(normalizedInstruction)) {
+		if (!isBroad && !hasEvidenceTarget && hasUnresolvedQualifier(normalizedInstruction)) {
 			return {selected: [], mode: 'targeted', reason: 'unresolved_qualifier'};
 		}
 
@@ -313,27 +293,155 @@ const chooseCandidates = (
 	return {selected: candidates, mode: 'fallback', reason: 'ambiguous_fallback'};
 };
 
+const hasRequiredEvidence = (
+	states: NormalizedEntityState[],
+	observations: ObservationState[],
+	profiles: ObservationProfile[],
+	scopedAreas: ReadonlySet<string>,
+): boolean =>
+	profiles.every((profile) =>
+		observations.some((observation) => hasProfile(observation.deviceClass, profile)),
+	) &&
+	[...scopedAreas].every((area) =>
+		profiles.every((profile) =>
+			observations.some(
+				(observation) => observation.area === area && hasProfile(observation.deviceClass, profile),
+			),
+		),
+	) &&
+	states.every(
+		(state) =>
+			state.area !== undefined &&
+			profiles.every((profile) =>
+				observations.some(
+					(observation) =>
+						observation.area === state.area && hasProfile(observation.deviceClass, profile),
+				),
+			),
+	);
+
+// Explicit user-provided context still works. HA-dependent conditions need complete evidence.
+const requiresObservationEvidence = (
+	instruction: string,
+	profiles: ObservationProfile[],
+	hasActionTargets: boolean,
+): boolean =>
+	profiles.length > 0 &&
+	(!hasActionTargets ||
+		hasAnyPhrase(instruction, [
+			'if',
+			'when',
+			'where',
+			'that are',
+			'which are',
+			'unoccupied rooms',
+			'empty rooms',
+			'vacant rooms',
+		]));
+
 export const selectRelevantContext = (
 	instruction: string,
 	candidates: RelevanceCandidate[],
 	options: SelectionOptions,
 ): SelectionResult => {
-	const choice = chooseCandidates(instruction, candidates);
-	if (choice.selected.length === 0) {
+	const actionable = candidates.filter(({state}) => getSupportedActions(state.domain).length > 0);
+	const observational = candidates.filter(({state}) => isObservationCandidate(state));
+	const normalizedInstruction = instructionText(instruction);
+	const profiles = observationProfiles(normalizedInstruction);
+	const explicitIds = exactEntityIds(instruction).map((id) => id.toLowerCase());
+	const areas = areaCandidates(normalizedInstruction, [...actionable, ...observational]);
+	const namedObservations = observational.filter(
+		({state}) => state.name !== undefined && hasPhrase(normalizedInstruction, state.name),
+	);
+	const hasObservationTarget =
+		observational.some(({state}) => explicitIds.includes(state.entityId.toLowerCase())) ||
+		namedObservations.length > 0;
+	const choice = chooseCandidates(
+		instruction,
+		actionable,
+		profiles.length > 0 || hasObservationTarget || explicitIds.length > 0,
+	);
+	const isSingleTarget = ['exact_entity', 'friendly_name'].includes(choice.reason);
+
+	const requiresEvidence = requiresObservationEvidence(
+		normalizedInstruction,
+		profiles,
+		choice.selected.length > 0,
+	);
+	const hasExplicitNoAreaTarget = actionable.some(
+		({state}) =>
+			state.area === undefined &&
+			(explicitIds.includes(state.entityId.toLowerCase()) ||
+				(state.name !== undefined && hasPhrase(normalizedInstruction, state.name))),
+	);
+	if (requiresEvidence && hasExplicitNoAreaTarget) {
+		return {kind: 'insufficient_context', reason: 'missing_observations'};
+	}
+
+	// Unassigned entities cannot participate in an area-conditioned decision. Withhold their
+	// context membership as well as their evidence requirement; never infer an area from a name.
+	const states = choice.selected
+		.map((candidate) => candidate.state)
+		.filter((state) => !requiresEvidence || state.area !== undefined);
+	const targetAreas = new Set(
+		states.flatMap((state) => (state.area === undefined ? [] : [state.area])),
+	);
+	const scopedAreas = new Set(
+		areas.flatMap(({state}) => (state.area === undefined ? [] : [state.area])),
+	);
+	const observationCandidates = observational.filter((candidate) => {
+		const {state} = candidate;
+		if (explicitIds.includes(state.entityId.toLowerCase())) {
+			return true;
+		}
+
+		const isInScope =
+			areas.length > 0
+				? areas.includes(candidate)
+				: targetAreas.size === 0 || (state.area !== undefined && targetAreas.has(state.area));
+		return (
+			isInScope &&
+			(namedObservations.includes(candidate) ||
+				profiles.some((profile) => hasProfile(state.deviceClass, profile)))
+		);
+	});
+	const observations = observationCandidates.flatMap(({state}) => {
+		const observation = toObservationState(state);
+		return observation === undefined ? [] : [observation];
+	});
+	// Never omit invalid selected evidence or decide conditional changes for an uncovered area.
+	const isMissingEvidence =
+		explicitIds.some(
+			(id) =>
+				/^(?:sensor|binary_sensor)\./v.test(id) &&
+				observations.every((observation) => observation.entityId.toLowerCase() !== id),
+		) ||
+		observationCandidates.length !== observations.length ||
+		(requiresEvidence && !hasRequiredEvidence(states, observations, profiles, scopedAreas));
+	if (isMissingEvidence) {
+		return {kind: 'insufficient_context', reason: 'missing_observations'};
+	}
+
+	if (states.length === 0 && observations.length === 0) {
 		return {kind: 'insufficient_context', reason: 'no_permitted_match'};
 	}
 
-	const states = choice.selected.map((candidate) => candidate.state);
+	// Observation IDs are deliberately absent from action scope and readiness authority.
 	const contextEntityIds = new Set(states.map((state) => state.entityId));
 	const scopeCatalogue = options.getSetScopes?.(contextEntityIds) ?? [];
-	const isSingleTarget = choice.reason === 'exact_entity' || choice.reason === 'friendly_name';
 	const requiresSetIntent =
 		!isSingleTarget &&
-		hasBroadScope(instruction, candidates) &&
-		Object.values(domainTerms).some((terms) => hasAnyPhrase(normalize(instruction), terms));
-	const intentMode = isSingleTarget ? 'entity_only' : requiresSetIntent ? 'set_only' : 'mixed';
+		hasBroadScope(normalizedInstruction, candidates) &&
+		Object.values(domainTerms).some((terms) => hasAnyPhrase(normalizedInstruction, terms));
+	const intentMode = getPlanningIntentMode({
+		instruction,
+		states,
+		observations,
+		setScopes: scopeCatalogue,
+		intentMode: isSingleTarget ? 'entity_only' : requiresSetIntent ? 'set_only' : 'mixed',
+	});
 	const requestBytes = planningRequestBytes(
-		{instruction, states, setScopes: scopeCatalogue, intentMode},
+		{instruction, states, observations, setScopes: scopeCatalogue, intentMode},
 		options.model,
 	);
 	if (requestBytes + outputHeadroomBytes > options.maxRequestBytes) {
@@ -343,12 +451,13 @@ export const selectRelevantContext = (
 	return {
 		kind: 'ready',
 		states,
+		observations,
 		contextEntityIds,
 		mode: choice.mode,
-		reasons: [choice.reason],
+		reasons: [states.length === 0 ? 'observation' : choice.reason],
 		requestBytes,
 		setScopes: scopeCatalogue,
-		requiresSetIntent,
+		requiresSetIntent: intentMode === 'set_only',
 		intentMode,
 	};
 };
@@ -361,6 +470,7 @@ export const selectionDiagnostic = (selection: SelectionResult, permittedCount: 
 				reason: selection.reasons[0],
 				permittedCount,
 				selectedCount: selection.states.length,
+				observationCount: selection.observations.length,
 				requestBytes: selection.requestBytes,
 			}
 		: {
@@ -368,5 +478,6 @@ export const selectionDiagnostic = (selection: SelectionResult, permittedCount: 
 				reason: selection.reason,
 				permittedCount,
 				selectedCount: 0,
+				observationCount: 0,
 				requestBytes: 0,
 			};

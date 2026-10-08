@@ -116,6 +116,7 @@ describe('createPlan', () => {
 		const userMessage = requests[0]?.messages.find((message) => message.role === 'user');
 		expect(JSON.parse(userMessage?.content ?? '')).toEqual({
 			instruction: 'Decide whether the example light should be turned off.',
+			observations: [],
 			states: [
 				{
 					entityId: 'light.example_light',
@@ -123,8 +124,6 @@ describe('createPlan', () => {
 					state: 'on',
 					name: 'Example Light',
 					area: 'Example Room',
-					deviceClass: undefined,
-					unit: undefined,
 					supportedActions: ['turn_on', 'turn_off'],
 				},
 			],
@@ -407,6 +406,7 @@ describe('createPlan', () => {
 		const userMessage = requests[0]?.messages.find((message) => message.role === 'user');
 		expect(JSON.parse(userMessage?.content ?? '')).toEqual({
 			instruction: 'Assess the example light.',
+			observations: [],
 			states: [
 				{
 					entityId: 'light.example_light',
@@ -458,7 +458,7 @@ describe('createPlan', () => {
 		expect(content.states.map((state) => state.entityId)).toEqual(['light.example_allowed']);
 	});
 
-	it('sends unknown-domain entities with no supported actions', async () => {
+	it('keeps unsupported domains out of the actionable model context', async () => {
 		const requests: OllamaChatRequest[] = [];
 
 		await createPlan(
@@ -489,7 +489,7 @@ describe('createPlan', () => {
 		const content = JSON.parse(userMessage?.content ?? '') as {
 			states: Array<{supportedActions: string[]}>;
 		};
-		expect(content.states[0]?.supportedActions).toEqual([]);
+		expect(content.states).toEqual([]);
 	});
 
 	it.each(['off', 'on', 'light.turn_off', 'switch.turn_off', 'toggle'])(

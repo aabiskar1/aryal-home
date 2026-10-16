@@ -14,6 +14,8 @@ ha-ai-context*.json
 
 # Installation-specific Home Assistant entity policy
 config/entity-policy.json
+config/entity-policy.json.audit-fix.lock
+config/entity-policy.json.audit-fix-*.tmp
 config/allowed-entities.json
 config/denied-entities.json
 

@@ -52,9 +52,6 @@ export const runAuditFixSession = async (
 		}
 
 		io.write('Proposed changes (each requires a separate explicit yes):');
-		for (const candidate of initial.candidates) {
-			io.write(presentFixCandidate(candidate, snapshot.data.redactions));
-		}
 
 		const attempted = new Set<string>();
 		while (!signal.aborted) {

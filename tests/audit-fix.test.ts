@@ -420,6 +420,34 @@ const session = async (
 };
 
 describe('interactive audit remediation', () => {
+	it('renders a single candidate exactly once immediately before its confirmation prompt', async () => {
+		const snapshot = suspicious();
+		const dependencies = fakeDependencies(snapshot);
+		const proposal = presentFixCandidate(firstCandidate(snapshot), snapshot.data.redactions);
+		const events: string[] = [];
+		const confirm = vi.fn(async (prompt: string) => {
+			events.push(prompt);
+			return 'n';
+		});
+		const result = await runAuditFixSession(
+			dependencies,
+			{
+				interactive: true,
+				write(text) {
+					events.push(text);
+				},
+				confirm,
+			},
+			new AbortController().signal,
+		);
+		expect(events.filter((event) => event === proposal)).toHaveLength(1);
+		expect(events.indexOf(proposal)).toBe(events.indexOf('Apply? [y/N] ') - 1);
+		expect(confirm).toHaveBeenCalledOnce();
+		expect(result.exitCode).toBe(0);
+		expect(dependencies.disable).not.toHaveBeenCalled();
+		expect(dependencies.deny).not.toHaveBeenCalled();
+	});
+
 	it.each(['', 'n', 'no', 'YES please', 'true', '1', 'maybe', 'yeſ'])(
 		'declines %j without writes and runs a final fresh audit',
 		async (answer) => {

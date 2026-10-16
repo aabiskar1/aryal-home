@@ -7,6 +7,7 @@ It loads `.env` if present; exported environment variables take precedence.
 ```sh
 npm run build
 npm run ha-audit
+npm run ha-audit -- --verbose
 npm run ha-audit -- --json
 npm run ha-audit -- --help
 ```
@@ -88,11 +89,20 @@ set expansion, readiness, fresh revalidation, DRY_RUN, and confirmation gates re
 
 ## Output and exit codes
 
-Human output includes a count summary and deterministic findings with reasons and suggestions.
-Errors and warnings precede informational details, with stable ordering within each severity.
-Routine disabled/registry-only status findings are summarized by code count in human output;
-JSON retains every per-entity detail. All warnings, errors, readiness, and policy findings remain
-individually visible.
+Default human output is intentionally compact: inventory and ERROR/WARN/INFO counts, one line
+per ERROR or WARN (`- CODE entity_id`, or the device ID when there is no entity ID), and the number
+of omitted INFO findings. It includes hints for `--verbose` and `--json`. Detailed INFO findings
+are omitted only from this presentation; all audit findings and summary counts remain intact.
+
+`--verbose` retains full human-readable reasons, suggestions, and detail fields, with errors and
+warnings before informational details and stable ordering within each severity. Routine
+disabled/registry-only status findings remain summarized by code count; JSON retains their
+per-entity detail.
+
+Supported invocations are no flag, `--verbose`, `--json`, or `--help`. Each flag must be used alone.
+Unknown flags, repeated flags, and combinations such as `--json --verbose` return exit code 2
+before reading Home Assistant. `--help` describes the modes without requiring HA connectivity.
+
 `--json` returns a stable `{summary, findings}` object without timestamps or raw payloads. Findings
 can be consumed without npm's script banner using `npm --silent run ha-audit -- --json`. Findings
 in JSON are ordered by entity ID, device ID, and code; group members are sorted independently of HA response

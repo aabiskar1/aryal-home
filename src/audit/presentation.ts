@@ -1,7 +1,7 @@
 import {isIP} from 'node:net';
 import type {AuditReport, AuditFinding} from './rules.js';
 
-const redact = (value: string, redactions: readonly string[]): string => {
+export const redactAuditText = (value: string, redactions: readonly string[]): string => {
 	let result = value;
 	for (const secret of redactions
 		.filter((secret) => secret.length > 0)
@@ -36,10 +36,11 @@ export const formatAuditReport = (
 	report: AuditReport,
 	mode: 'compact' | 'verbose' | 'json' = 'compact',
 	redactions: readonly string[] = [],
+	readOnlyNotice = 'Read-only. No changes were made.',
 ): string => {
 	const safeReport = JSON.parse(
 		JSON.stringify(report, (_key, value: unknown) =>
-			typeof value === 'string' ? redact(value, redactions) : (value ?? null),
+			typeof value === 'string' ? redactAuditText(value, redactions) : (value ?? null),
 		),
 	) as AuditReport;
 	if (mode === 'json') {
@@ -54,7 +55,7 @@ export const formatAuditReport = (
 	if (mode === 'compact') {
 		return [
 			...summaryLines,
-			'Read-only. No changes were made.',
+			readOnlyNotice,
 			...(['error', 'warn'] as const).flatMap((severity) => {
 				const findings = safeReport.findings.filter((finding) => finding.severity === severity);
 				return findings.length === 0

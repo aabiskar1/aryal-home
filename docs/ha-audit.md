@@ -1,6 +1,7 @@
-# Read-only Home Assistant metadata audit
+# Home Assistant metadata audit and interactive remediation
 
 `ha-audit` is a local maintenance command for reviewing metadata that affects ARYAL reasoning.
+Default, verbose, and JSON audits remain read-only. Only explicit interactive `--fix` can write.
 It needs Home Assistant connectivity and `HA_URL`/`HA_TOKEN`, but no Ollama instance or model.
 It loads `.env` if present; exported environment variables take precedence.
 
@@ -9,13 +10,14 @@ npm run build
 npm run ha-audit
 npm run ha-audit -- --verbose
 npm run ha-audit -- --json
+npm run ha-audit -- --fix
 npm run ha-audit -- --help
 ```
 
-The tool performs only a GET of current states, authenticated read-only entity/device/area/label
-registry lists, and a read of `config/entity-policy.json` if present. It never calls services,
-updates registries, writes policy, or imports the execution/model pipeline. The shared state
-reader retains runtime transport validation, timeouts, and retry behavior. Invalid/unreadable
+The read-only audit performs only a GET of current states, authenticated read-only
+entity/device/area/label registry lists, and a read of `config/entity-policy.json` if present. These modes never call services,
+update registries, write policy, or load remediation. No mode imports the execution/model pipeline.
+The shared state reader retains runtime transport validation, timeouts, and retry behavior. Invalid/unreadable
 policy is an audit failure; absent policy is reported with default-deny exposure and is not created.
 Registry access must succeed: unlike runtime legacy-policy fallback, an audit cannot describe
 registry quality without a registry snapshot.
@@ -99,7 +101,8 @@ warnings before informational details and stable ordering within each severity. 
 disabled/registry-only status findings remain summarized by code count; JSON retains their
 per-entity detail.
 
-Supported invocations are no flag, `--verbose`, `--json`, or `--help`. Each flag must be used alone.
+Supported invocations are no flag, `--verbose`, `--json`, `--fix`, or `--help`.
+Each flag must be used alone.
 Unknown flags, repeated flags, and combinations such as `--json --verbose` return exit code 2
 before reading Home Assistant. `--help` describes the modes without requiring HA connectivity.
 
@@ -118,6 +121,73 @@ strings, and terminal control characters are removed from displayed string value
 
 Suggested names/area assignments are review hints, never runtime authority. Assignments must be
 reviewed and made deliberately in Home Assistant; ARYAL continues to use validated registry
-metadata for area scopes. **The tool does not modify Home Assistant or entity-policy.json.**
+metadata for area scopes. **Read-only audit modes do not modify Home Assistant or entity-policy.json.**
 Audit output intentionally identifies local entities and rooms. Treat it as installation-sensitive
 and share only sanitized counts and representative finding codes, not full inventories.
+
+## Interactive remediation (`--fix`)
+
+`npm run ha-audit -- --fix` requires interactive input **and** output terminals. It runs an audit,
+shows non-fixable warning/control-duplicate issues with reasons, and previews exact changes before prompting for
+each one. `Apply? [y/N]` defaults to NO. Only an explicit `y` or `yes` (case-insensitive, surrounding
+whitespace ignored) approves that single change. Empty input, `n`/`no`, or any other response declines
+and continues. There is no blanket approval, non-interactive write, or automatic fix.
+`--fix --json`, `--fix --verbose`, repeated flags, and other combinations return exit code 2.
+
+Only two deterministic candidate types exist:
+
+- `disable_stale_entity`: an exact `duplicate_friendly_name` group has exactly two enabled,
+  metadata-complete registry members, with an identical friendly name, the same supported
+  light/switch domain, and the same non-missing registry device. The candidate is unavailable,
+  unknown, or has no current state, and is **not currently policy-permitted**; its sole sibling
+  has a current usable `on`/`off` state. There must be validated admin access and supported registry
+  identity reads for both entries, with stable unique IDs/platform metadata and matching registry-list
+  fields. Ambiguous/mixed/multi-member groups, normalized-only name matches, absent registry evidence,
+  already disabled members, two usable/unusable members, and permitted candidates are non-fixable.
+  Registry-only names are not inferred; if existing audit evidence cannot establish a duplicate,
+  no disable is offered. No ordering, age, fuzzy name, or LLM inference identifies the stale member.
+- `deny_policy_entity`: a `suspicious_actionable_name` entity is currently policy-permitted and
+  an existing valid policy file is available. Append exactly `{"entityId":"light.example_status"}`
+  to `deny` for that specific entity. The preview shows the exact selector and allowed → denied
+  effect. Existing version, key/selector ordering, allow entries, and unrelated deny entries remain
+  intact. Already denied or otherwise non-permitted entities receive no deny proposal.
+
+The only Home Assistant write is the documented admin WebSocket
+[`config/entity_registry/update`](https://github.com/home-assistant/core/blob/dev/homeassistant/components/config/entity_registry.py)
+with the exact entity ID and `disabled_by: "user"`. No other update fields are accepted by this
+transport. It re-reads the entry and verifies `disabled_by` after the update; an acknowledgement
+alone is not success. Unsupported/unauthorized reads prevent disable proposals; mutation denial
+or verification failure is reported without claiming success or retrying a write.
+
+After confirmation, fresh state/registry/policy reads re-derive the candidate and compare its
+preconditions with the audited snapshot. Comparisons include relevant members' complete current
+state records, registry identity/metadata, device/area/label metadata, and exact policy bytes.
+A change causes `Skipped: underlying state changed since audit. Re-run audit.` No write follows.
+The registry transport checks exact identity again immediately before sending the disable.
+Writes run sequentially, and successful verified fixes trigger a fresh audit before the next
+proposal. Every later proposal still needs its own confirmation and final fresh check.
+
+Policy updates validate the existing and resulting policy, insert only the exact deny, write and
+sync a same-directory temporary file, and atomically rename it over the original. A session lock
+prevents overlapping ARYAL policy writers; exact bytes are re-checked immediately before replacement.
+Original permission bits are preserved. Missing, invalid, symlinked, or hard-linked policies are
+refused. Temporary/lock files are gitignored and normally removed on completion/failure. Policy
+is re-read/parsed afterward, and the existing resolver must confirm the exact deny is effective.
+These changes can only reduce ARYAL authority; no allow/grant operation exists.
+
+Freshness checks are optimistic: HA and external file editors provide no shared compare-and-swap
+transaction. Avoid concurrent metadata/policy edits during a fix session. Ctrl+C/EOF at a prompt
+or before dispatch prevents the current write. Atomic policy replacement leaves either the old or
+new valid file. If interrupted after a registry write was sent or a policy replacement committed,
+ARYAL finishes verification and stops further writes; it cannot retract an already transmitted
+write. Uncertain mutation/verification stops the session and is reported as unconfirmed.
+
+At the end, the tool reports applied/skipped/declined/failed totals and runs a final fresh compact
+audit, displaying remaining errors/warnings. Zero remaining errors/warnings yields
+`No actionable warnings remain.` Fix mode exits 0 after a completed session (including declines
+or remaining warnings), 1 for stale skips, failures, or interruption, and 2 for invalid/non-terminal use.
+
+Renaming, deletion, area/device-area assignment, policy allows/grants, broad policy rewrites, arbitrary
+warning fixes, and LLM-generated mutations are unsupported. No mode calls HA services, generates
+runtime actionable commands, invokes the planning/execution API, or grants the LLM mutation authority.
+Live previews and policy contents remain installation-sensitive; sanitize before sharing.

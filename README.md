@@ -531,11 +531,17 @@ npm run ha-audit -- --json
 
 The audit reports missing/conflicting areas, ambiguous names, state/disablement issues,
 read-only observation readiness, actionable policy hints, and dangling policy references.
-It requires Home Assistant access, with no Ollama/model dependency. It performs no service calls,
-registry updates, or policy writes. Suggestions are review hints; Home Assistant registry metadata
+It requires Home Assistant access, with no Ollama/model dependency. Read-only audit modes perform
+no service calls, registry updates, or policy writes. Suggestions are review hints; Home Assistant registry metadata
 remains the source of area authority. Warnings do not cause a failing exit code.
 Default output shows compact errors/warnings, counts, and the number of omitted INFO findings.
 Use `--verbose` for full human detail or `--json` for the complete structured report.
+For deliberate metadata/policy remediation, `npm run ha-audit -- --fix` requires an interactive
+terminal and a separate `Apply? [y/N]` confirmation for every write (default NO). It supports only
+strict stale-duplicate registry disable and exact suspicious-entity policy deny. It freshly revalidates
+state/registry/policy before each write, verifies the result, and re-audits. No deletes, renames, area
+assignment, services, runtime execution, or LLM mutations are supported; policy changes only reduce
+authority. Read-only modes never load remediation.
 See [audit behavior, privacy, and exit codes](docs/ha-audit.md). Keep output local or sanitize it
 before sharing because entity and room names identify your installation.
 

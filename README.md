@@ -525,6 +525,7 @@ Inspect metadata quality separately from planning or execution:
 ```sh
 npm run build
 npm run ha-audit
+npm run ha-audit -- --verbose
 npm run ha-audit -- --json
 ```
 
@@ -533,6 +534,8 @@ read-only observation readiness, actionable policy hints, and dangling policy re
 It requires Home Assistant access, with no Ollama/model dependency. It performs no service calls,
 registry updates, or policy writes. Suggestions are review hints; Home Assistant registry metadata
 remains the source of area authority. Warnings do not cause a failing exit code.
+Default output shows compact errors/warnings, counts, and the number of omitted INFO findings.
+Use `--verbose` for full human detail or `--json` for the complete structured report.
 See [audit behavior, privacy, and exit codes](docs/ha-audit.md). Keep output local or sanitize it
 before sharing because entity and room names identify your installation.
 

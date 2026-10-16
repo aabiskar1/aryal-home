@@ -44,20 +44,23 @@ beforeEach(() => {
 afterEach(() => vi.unstubAllEnvs());
 
 describe('production read-only audit collection', () => {
-	it('only GETs states, lists registries, and reads policy, with no service or policy writes', async () => {
-		const result = await runHaAuditCli(['--json']);
-		expect(result.exitCode).toBe(0);
-		expect(http.get).toHaveBeenCalledExactlyOnceWith('states');
-		expect(http.post).not.toHaveBeenCalled();
-		expect(writeFile).not.toHaveBeenCalled();
-		expect(readFile).toHaveBeenCalledExactlyOnceWith('config/entity-policy.json', 'utf8');
-		expect(getHomeAssistantRegistries).toHaveBeenCalledExactlyOnceWith(
-			'https://ha.example.test',
-			'test-audit-token',
-		);
-		expect(result.output).not.toContain('test-audit-token');
-		expect(result.output).not.toContain('ha.example.test');
-	});
+	it.each([{args: []}, {args: ['--verbose']}, {args: ['--json']}])(
+		'only GETs states, lists registries, and reads policy, with no service or policy writes ($args)',
+		async ({args}) => {
+			const result = await runHaAuditCli(args);
+			expect(result.exitCode).toBe(0);
+			expect(http.get).toHaveBeenCalledExactlyOnceWith('states');
+			expect(http.post).not.toHaveBeenCalled();
+			expect(writeFile).not.toHaveBeenCalled();
+			expect(readFile).toHaveBeenCalledExactlyOnceWith('config/entity-policy.json', 'utf8');
+			expect(getHomeAssistantRegistries).toHaveBeenCalledExactlyOnceWith(
+				'https://ha.example.test',
+				'test-audit-token',
+			);
+			expect(result.output).not.toContain('test-audit-token');
+			expect(result.output).not.toContain('ha.example.test');
+		},
+	);
 
 	it('preserves the shared state reader transport, retries, and response validation', async () => {
 		const readStates = createHomeAssistantStateReader(

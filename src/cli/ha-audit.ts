@@ -13,17 +13,23 @@ export const runHaAuditCli = async (
 	if (args.length === 1 && args[0] === '--help') {
 		return {
 			exitCode: 0,
-			output:
-				'Usage: npm run ha-audit -- [--json]\nRead-only Home Assistant metadata and local policy audit. No model or execution.',
+			output: [
+				'Usage: npm run ha-audit -- [--verbose | --json | --help]',
+				'Read-only Home Assistant metadata and local policy audit. No model or execution.',
+				'Default: compact errors/warnings and counts; INFO detail omitted.',
+				'--verbose: full human-readable findings with reasons and suggestions; routine registry status summarized.',
+				'--json: complete structured output with all findings.',
+				'--help: show this help. Use each flag on its own.',
+			].join('\n'),
 		};
 	}
 
-	if (args.length > 1 || (args.length === 1 && args[0] !== '--json')) {
+	if (args.length > 1 || (args.length === 1 && !['--json', '--verbose'].includes(args[0]!))) {
 		return {
 			exitCode: 2,
 			output: JSON.stringify({
 				outcome: 'invalid_arguments',
-				reason: 'use_no_flags_or_json',
+				reason: 'use_no_flags_or_one_of_verbose_json_help',
 				exitCode: 2,
 			}),
 		};
@@ -32,7 +38,8 @@ export const runHaAuditCli = async (
 	try {
 		const data = await collect();
 		const report = auditInventory(buildAuditInventory(data));
-		return {exitCode: 0, output: formatAuditReport(report, args[0] === '--json', data.redactions)};
+		const mode = args[0] === '--json' ? 'json' : args[0] === '--verbose' ? 'verbose' : 'compact';
+		return {exitCode: 0, output: formatAuditReport(report, mode, data.redactions)};
 	} catch {
 		return {
 			exitCode: 1,

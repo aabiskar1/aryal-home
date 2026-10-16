@@ -34,7 +34,7 @@ const humanFinding = (finding: AuditFinding): string => {
 /** Whitelisted report fields only; known credentials and address strings are redacted in values. */
 export const formatAuditReport = (
 	report: AuditReport,
-	isJson: boolean,
+	mode: 'compact' | 'verbose' | 'json' = 'compact',
 	redactions: readonly string[] = [],
 ): string => {
 	const safeReport = JSON.parse(
@@ -42,11 +42,39 @@ export const formatAuditReport = (
 			typeof value === 'string' ? redact(value, redactions) : (value ?? null),
 		),
 	) as AuditReport;
-	if (isJson) {
+	if (mode === 'json') {
 		return JSON.stringify(safeReport, undefined, 2);
 	}
 
 	const {summary} = safeReport;
+	const summaryLines = [
+		`HA metadata audit: ${summary.entitiesScanned} entities (${summary.stateEntitiesScanned} with states), ${summary.devicesScanned} devices, ${summary.areasScanned} areas.`,
+		`Findings: ${summary.errors} ERROR, ${summary.warnings} WARN, ${summary.info} INFO.`,
+	];
+	if (mode === 'compact') {
+		return [
+			...summaryLines,
+			'Read-only. No changes were made.',
+			...(['error', 'warn'] as const).flatMap((severity) => {
+				const findings = safeReport.findings.filter((finding) => finding.severity === severity);
+				return findings.length === 0
+					? []
+					: [
+							'',
+							severity === 'error' ? 'Errors:' : 'Warnings:',
+							...findings.map(
+								(finding) =>
+									`- ${finding.code.toUpperCase()}${finding.entityId === undefined && finding.deviceId === undefined ? '' : ` ${finding.entityId ?? finding.deviceId}`}`,
+							),
+						];
+			}),
+			'',
+			`${summary.info} INFO findings omitted.`,
+			'Run with --verbose for full human-readable detail.',
+			'Run with --json for complete machine-readable output.',
+		].join('\n');
+	}
+
 	const routineCodes = new Set(['registry_disabled', 'registry_entity_without_state']);
 	const severityOrder = {error: 0, warn: 1, info: 2};
 	const detailedFindings = safeReport.findings
@@ -56,8 +84,7 @@ export const formatAuditReport = (
 		(code) => `${code}=${safeReport.findings.filter((finding) => finding.code === code).length}`,
 	);
 	return [
-		`HA metadata audit: ${summary.entitiesScanned} entities (${summary.stateEntitiesScanned} with states), ${summary.devicesScanned} devices, ${summary.areasScanned} areas.`,
-		`Findings: ${summary.errors} ERROR, ${summary.warnings} WARN, ${summary.info} INFO.`,
+		...summaryLines,
 		'Read-only. Observation exposure grants evidence, not control. Suggestions are review hints; no changes were made.',
 		`Routine registry status (per-entity details in --json): ${routineSummary.join(', ')}.`,
 		...detailedFindings.map((finding) => humanFinding(finding)),

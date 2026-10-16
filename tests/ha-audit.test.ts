@@ -72,7 +72,7 @@ describe('deterministic Home Assistant metadata audit', () => {
 			entityId: reading.entity_id,
 			details: {area: undefined, areaSource: 'none'},
 		});
-		expect(formatAuditReport(report(data), true)).not.toContain('Untrusted Room');
+		expect(formatAuditReport(report(data), 'json')).not.toContain('Untrusted Room');
 	});
 
 	it('distinguishes missing entity assignment from inherited device area', () => {
@@ -288,10 +288,10 @@ describe('deterministic Home Assistant metadata audit', () => {
 		expect(findings(data, 'policy_allow_entity_not_discovered')[0]?.details.registryPresent).toBe(
 			true,
 		);
-		const human = formatAuditReport(report(data), false);
+		const human = formatAuditReport(report(data), 'verbose');
 		expect(human).toContain('registry_disabled=1, registry_entity_without_state=1');
 		expect(human).not.toContain('[INFO] REGISTRY_DISABLED');
-		expect(formatAuditReport(report(data), true)).toContain('"code": "registry_disabled"');
+		expect(formatAuditReport(report(data), 'json')).toContain('"code": "registry_disabled"');
 	});
 
 	it.each(['status', 'indicator', 'diagnostic', 'debug'])(
@@ -357,11 +357,11 @@ describe('deterministic Home Assistant metadata audit', () => {
 		data.states.reverse();
 		registries(data).entities.reverse();
 		registries(data).areas.reverse();
-		for (const mode of [false, true]) {
+		for (const mode of ['compact', 'verbose', 'json'] as const) {
 			expect(formatAuditReport(report(data), mode)).toBe(formatAuditReport(first, mode));
 		}
 
-		expect(JSON.parse(formatAuditReport(first, true))).toMatchObject({
+		expect(JSON.parse(formatAuditReport(first, 'json'))).toMatchObject({
 			summary: {
 				entitiesScanned: 2,
 				devicesScanned: 1,
@@ -371,8 +371,8 @@ describe('deterministic Home Assistant metadata audit', () => {
 				info: 2,
 			},
 		});
-		expect(formatAuditReport(first, false)).toContain(
-			'[WARN] DUPLICATE_FRIENDLY_NAME light.example_first',
+		expect(formatAuditReport(first, 'compact')).toContain(
+			'- DUPLICATE_FRIENDLY_NAME light.example_first',
 		);
 	});
 
@@ -384,7 +384,7 @@ describe('deterministic Home Assistant metadata audit', () => {
 		data.states[0]!.attributes.private_value = 'private-raw-marker';
 		data.states[0]!.attributes.area_name = 'Untrusted Secret';
 		registries(data).areas[0]!.name = 'Example 192.0.2.10 2001:db8::1 https://other.example.test';
-		for (const mode of [false, true]) {
+		for (const mode of ['compact', 'verbose', 'json'] as const) {
 			const output = formatAuditReport(report(data), mode, data.redactions);
 			for (const secret of [
 				'secret-token',
@@ -398,11 +398,13 @@ describe('deterministic Home Assistant metadata audit', () => {
 				expect(output).not.toContain(secret);
 			}
 
-			expect(output).toContain('[redacted]');
+			if (mode !== 'compact') {
+				expect(output).toContain('[redacted]');
+			}
 		}
 
 		expect(() => {
-			JSON.parse(formatAuditReport(report(data), true, data.redactions));
+			JSON.parse(formatAuditReport(report(data), 'json', data.redactions));
 		}).not.toThrow();
 	});
 });
@@ -442,7 +444,7 @@ describe('ARYAL-relevant audit severity', () => {
 				details: {policyPermitted: false, aryalRelevant: false},
 			});
 			expect(report(data).summary.warnings).toBe(0);
-			expect(formatAuditReport(report(data), true)).toContain('"code": "missing_area"');
+			expect(formatAuditReport(report(data), 'json')).toContain('"code": "missing_area"');
 		},
 	);
 
@@ -667,14 +669,189 @@ describe('ARYAL-relevant audit severity', () => {
 		data.policy = {version: 1, allow: [{domain: 'light'}], deny: []};
 		registries(data).devices[0]!.area_id = null;
 		const result = report(data);
-		const human = formatAuditReport(result, false);
+		const human = formatAuditReport(result, 'verbose');
 		expect(human.indexOf('[WARN]')).toBeLessThan(human.indexOf('[INFO]'));
 		expect(human.lastIndexOf('[WARN]')).toBeLessThan(human.indexOf('[INFO]'));
-		const json = JSON.parse(formatAuditReport(result, true)) as AuditReport;
+		const json = JSON.parse(formatAuditReport(result, 'json')) as AuditReport;
 		expect(json.findings).toHaveLength(result.findings.length);
 		expect(
 			json.findings.filter(({code}) => code === 'missing_area').map(({severity}) => severity),
 		).toEqual(['warn', 'info']);
+	});
+});
+
+describe('audit presentation modes', () => {
+	// Presentation-only ERROR fixture: current rules need not generate an error to render one.
+	const presentationReport: AuditReport = {
+		summary: {
+			entitiesScanned: 3,
+			stateEntitiesScanned: 2,
+			devicesScanned: 1,
+			areasScanned: 2,
+			errors: 1,
+			warnings: 2,
+			info: 1,
+		},
+		findings: [
+			{
+				severity: 'info',
+				code: 'actionable_readiness',
+				entityId: 'light.example_lamp',
+				details: {hasArea: false},
+				reason: 'Background readiness reason.',
+				suggestion: 'Background readiness suggestion.',
+			},
+			{
+				severity: 'warn',
+				code: 'device_entities_multiple_areas',
+				deviceId: 'example_device',
+				details: {areas: ['Example Room', 'Other Room']},
+				reason: 'Device area reason.',
+				suggestion: 'Device area suggestion.',
+			},
+			{
+				severity: 'error',
+				code: 'example_error',
+				entityId: 'light.example_error',
+				details: {},
+				reason: 'Error reason.',
+				suggestion: 'Error suggestion.',
+			},
+			{
+				severity: 'warn',
+				code: 'missing_area',
+				entityId: 'light.example_lamp',
+				details: {hasArea: false},
+				reason: 'Missing area reason.',
+				suggestion: 'Missing area suggestion.',
+			},
+		],
+	};
+
+	it('defaults to a compact summary and one line per error/warning, with all INFO detail omitted', () => {
+		expect(formatAuditReport(presentationReport)).toBe(
+			[
+				'HA metadata audit: 3 entities (2 with states), 1 devices, 2 areas.',
+				'Findings: 1 ERROR, 2 WARN, 1 INFO.',
+				'Read-only. No changes were made.',
+				'',
+				'Errors:',
+				'- EXAMPLE_ERROR light.example_error',
+				'',
+				'Warnings:',
+				'- DEVICE_ENTITIES_MULTIPLE_AREAS example_device',
+				'- MISSING_AREA light.example_lamp',
+				'',
+				'1 INFO findings omitted.',
+				'Run with --verbose for full human-readable detail.',
+				'Run with --json for complete machine-readable output.',
+			].join('\n'),
+		);
+	});
+
+	it('preserves detailed reasons, suggestions, and fields in verbose severity order', () => {
+		const output = formatAuditReport(presentationReport, 'verbose');
+		for (const finding of presentationReport.findings) {
+			expect(output).toContain(`[${finding.severity.toUpperCase()}] ${finding.code.toUpperCase()}`);
+			expect(output).toContain(`  reason: ${finding.reason}`);
+			expect(output).toContain(`  suggestion: ${finding.suggestion}`);
+		}
+
+		expect(output).toContain('hasArea=false');
+		expect(output.indexOf('[ERROR]')).toBeLessThan(output.indexOf('[WARN]'));
+		expect(output.lastIndexOf('[WARN]')).toBeLessThan(output.indexOf('[INFO]'));
+		expect(output.indexOf('DEVICE_ENTITIES_MULTIPLE_AREAS')).toBeLessThan(
+			output.indexOf('MISSING_AREA'),
+		);
+	});
+
+	it('keeps the complete JSON report structurally unchanged, including INFO and original order', () => {
+		expect(formatAuditReport(presentationReport, 'json')).toBe(
+			JSON.stringify(presentationReport, undefined, 2),
+		);
+	});
+
+	it.each(['compact', 'verbose', 'json'] as const)(
+		'redacts identifiers as well as details in %s mode',
+		(mode) => {
+			const sensitive = structuredClone(presentationReport);
+			sensitive.findings[1]!.deviceId = 'example-secret-device';
+			sensitive.findings[2]!.entityId = 'light.example-secret-token';
+			sensitive.findings[3]!.entityId = 'https://ha.example.test/192.0.2.10\n\u{1B}';
+			sensitive.findings[0]!.reason = 'example-secret-token 2001:db8::1';
+			const output = formatAuditReport(sensitive, mode, [
+				'example-secret-device',
+				'example-secret-token',
+			]);
+			for (const secret of [
+				'example-secret-device',
+				'example-secret-token',
+				'https://ha.example.test',
+				'192.0.2.10',
+				'2001:db8::1',
+				'\u{1B}',
+			]) {
+				expect(output).not.toContain(secret);
+			}
+
+			expect(output).toContain('[redacted]');
+		},
+	);
+
+	it('does not mutate or drop internal findings/counts when switching modes', () => {
+		const before = structuredClone(presentationReport);
+		for (const mode of ['compact', 'verbose', 'json'] as const) {
+			const output = formatAuditReport(presentationReport, mode);
+			expect(presentationReport).toEqual(before);
+			if (mode !== 'json') {
+				expect(output).toContain('Findings: 1 ERROR, 2 WARN, 1 INFO.');
+			}
+		}
+	});
+
+	it('keeps CLI counts and findings identical across output modes', async () => {
+		const data = fixture();
+		registries(data).devices[0]!.area_id = null;
+		const before = report(data);
+		expect(before.summary).toEqual({
+			entitiesScanned: 1,
+			stateEntitiesScanned: 1,
+			devicesScanned: 1,
+			areasScanned: 2,
+			errors: 0,
+			warnings: 1,
+			info: 1,
+		});
+		const results = await Promise.all(
+			[[], ['--verbose'], ['--json']].map(async (args) => ({
+				args,
+				result: await runHaAuditCli(args, async () => data),
+			})),
+		);
+		for (const {args, result} of results) {
+			expect(result.exitCode).toBe(0);
+			if (args[0] === '--json') {
+				expect(JSON.parse(result.output)).toEqual(
+					JSON.parse(JSON.stringify(before, (_key, value: unknown) => value ?? null)),
+				);
+			} else {
+				expect(result.output).toContain('Findings: 0 ERROR, 1 WARN, 1 INFO.');
+			}
+
+			expect(report(data)).toEqual(before);
+		}
+	});
+
+	it('handles an audit with no findings without empty finding sections', () => {
+		const empty: AuditReport = {
+			summary: {...presentationReport.summary, errors: 0, warnings: 0, info: 0},
+			findings: [],
+		};
+		const output = formatAuditReport(empty);
+		expect(output).toContain('Findings: 0 ERROR, 0 WARN, 0 INFO.');
+		expect(output).toContain('0 INFO findings omitted.');
+		expect(output).not.toContain('Warnings:');
+		expect(output).not.toContain('Errors:');
 	});
 });
 
@@ -689,18 +866,24 @@ describe('read-only audit CLI', () => {
 		expect(parsed.summary.warnings).toBe(1);
 	});
 
-	it.each([{args: []}, {args: ['--json']}])(
+	it.each([{args: []}, {args: ['--verbose']}, {args: ['--json']}])(
 		'supports human or JSON output: $args',
 		async ({args}) => {
 			const result = await runHaAuditCli(args, async () => fixture());
 			expect(result.exitCode).toBe(0);
-			expect(result.output).toContain(args.length === 0 ? 'HA metadata audit' : '"summary"');
+			expect(result.output).toContain(args[0] === '--json' ? '"summary"' : 'HA metadata audit');
 		},
 	);
 
 	it.each([
 		{args: ['--domain', 'light']},
 		{args: ['--json', '--json']},
+		{args: ['--verbose', '--verbose']},
+		{args: ['--json', '--verbose']},
+		{args: ['--verbose', '--json']},
+		{args: ['--verbose', '--help']},
+		{args: ['--help', '--help']},
+		{args: ['--unknown']},
 		{args: ['--execute']},
 		{args: ['instruction']},
 		{args: ['--json', '--help']},
@@ -713,7 +896,17 @@ describe('read-only audit CLI', () => {
 
 	it('offers help without HA credentials or collection', async () => {
 		const collect = vi.fn(async () => fixture());
-		expect(await runHaAuditCli(['--help'], collect)).toMatchObject({exitCode: 0});
+		const result = await runHaAuditCli(['--help'], collect);
+		expect(result.exitCode).toBe(0);
+		for (const text of [
+			'Default: compact errors/warnings',
+			'--verbose: full human-readable',
+			'--json: complete structured',
+			'--help: show',
+		]) {
+			expect(result.output).toContain(text);
+		}
+
 		expect(collect).not.toHaveBeenCalled();
 	});
 

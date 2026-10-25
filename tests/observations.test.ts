@@ -947,9 +947,10 @@ describe('illuminance relevance and planning boundaries', () => {
 		const {result, context} = await run(instruction, illuminanceFixture(), [intent]);
 		expect(context?.states).toHaveLength(3);
 		expect(context?.observations).toHaveLength(1);
-		expect(result.intentExpansion.sets[0]?.matchedCount).toBe(3);
-		expect(result.intentExpansion.outcome).toBe('complete');
-		expect(result.executionReadiness.commands).toHaveLength(shouldTurnOn ? 1 : 2);
+		expect(result.intentExpansion.sets).toEqual([]);
+		expect(result.validatedPlan).toMatchObject({outcome: 'insufficient_context', actions: []});
+		expect(result.conditionIssue?.reason).toBe('unresolved_illuminance_threshold');
+		expect(result.executionReadiness.commands).toEqual([]);
 		if (result.selection.kind === 'ready') {
 			expect(result.selection.contextEntityIds.has('sensor.example_living_illuminance')).toBe(
 				false,
@@ -1099,7 +1100,10 @@ describe('illuminance relevance and planning boundaries', () => {
 			reason: 'Forged sensor authority.',
 		};
 		const {result} = await run('Turn on Living Room lights if dark', input, [action]);
-		expect(result.validatedPlan.rejectedActions[0]?.reason).toBe('not_in_context');
+		expect(result.conditionIssue?.reason).toBe('unresolved_illuminance_threshold');
+		expect(validatePlan(plan([action]), input.policy, new Set()).rejectedActions[0]?.reason).toBe(
+			'not_in_context',
+		);
 		expect(
 			validatePlan(plan([action]), input.policy, new Set([entityId])).rejectedActions[0]?.reason,
 		).toBe('unsupported_action');

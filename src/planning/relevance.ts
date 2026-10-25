@@ -350,7 +350,11 @@ export const selectRelevantContext = (
 	const actionable = candidates.filter(({state}) => getSupportedActions(state.domain).length > 0);
 	const observational = candidates.filter(({state}) => isObservationCandidate(state));
 	const normalizedInstruction = instructionText(instruction);
-	const semanticInstruction = withoutEntityNames(normalizedInstruction, candidates);
+	// Recognize numeric unit spellings such as 50lx only after IDs/names are masked.
+	const semanticInstruction = withoutEntityNames(normalizedInstruction, candidates).replaceAll(
+		/(?<=\d)(?=lx\b|lux\b)/gv,
+		' ',
+	);
 	const profiles = observationProfiles(semanticInstruction);
 	const explicitIds = exactEntityIds(instruction).map((id) => id.toLowerCase());
 	const areas = areaCandidates(normalizedInstruction, [...actionable, ...observational]);

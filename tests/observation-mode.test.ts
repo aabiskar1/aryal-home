@@ -109,6 +109,16 @@ const scopedProposal = {
 describe('observation-only planning mode', () => {
 	it.each([
 		{
+			instruction: 'How bright is the Living Room?',
+			evidence: state('sensor.example_living_illuminance', '48', 'illuminance', 'lx'),
+			summary: 'Proposed plan: The Living Room illuminance is 48 lx.',
+		},
+		{
+			instruction: 'What is the Living Room light level?',
+			evidence: state('sensor.example_living_illuminance', '48', 'illuminance', 'lx'),
+			summary: 'Proposed plan: The Living Room light level is 48 lx.',
+		},
+		{
 			instruction: 'What is the Living Room temperature?',
 			evidence: state('sensor.example_living_temperature', '21.5', 'temperature', '°C'),
 			summary: 'Proposed plan: Living Room temperature is 21.5 °C.',
@@ -357,4 +367,29 @@ describe('observation-only planning mode', () => {
 		expect(overflow.selection).toEqual({kind: 'insufficient_context', reason: 'over_budget'});
 		expect(blockedChat).not.toHaveBeenCalled();
 	});
+});
+
+it('distinguishes measurement reporting from a subjective darkness interpretation in the informational prompt', async () => {
+	const input = fixture(state('sensor.example_living_illuminance', '48', 'illuminance', 'lx'));
+	const chat = vi.fn<OllamaChatTransport>(async () =>
+		JSON.stringify({
+			outcome: 'insufficient_context',
+			summary: 'Proposed plan: A darkness criterion or user preference is required.',
+			actions: [],
+		}),
+	);
+	const result = await runPlanningPipeline(
+		'Is the Living Room too dark?',
+		input.entities,
+		input.policy,
+		{...options, chat},
+	);
+	const prompt = chat.mock.calls[0]![0].messages[0]!.content;
+	expect(prompt).toContain('No darkness threshold is needed to report a measurement');
+	expect(prompt).toContain('Copy the actual supplied value and unit');
+	expect(prompt).toContain('"Is it too dark?" asks for an interpretation');
+	expect(result.selection).toMatchObject({intentMode: 'observation_only'});
+	expect(result.validatedPlan).toMatchObject({outcome: 'insufficient_context', actions: []});
+	expect(result.conditionIssue).toBeUndefined();
+	expect(result.executionReadiness.commands).toEqual([]);
 });

@@ -83,6 +83,7 @@ export const observationRegistry = defineObservationRegistry([
 			phrases: [
 				'illuminance',
 				'lux',
+				'lx',
 				'light level',
 				'how bright',
 				'how dark',

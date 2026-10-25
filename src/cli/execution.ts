@@ -14,6 +14,7 @@ const targetDiagnostic = (entityId: string) =>
 
 const planningDiagnostics = (plan: PlanningPipelineResult) => ({
 	selection: selectionDiagnostic(plan.selection, plan.permittedCount),
+	...(plan.conditionIssue !== undefined && {conditionIssue: plan.conditionIssue}),
 	outcome: plan.validatedPlan.outcome,
 	intentExpansion: plan.intentExpansion,
 	actions: plan.validatedPlan.actions.map(({entityId, action, domain, service}) => ({

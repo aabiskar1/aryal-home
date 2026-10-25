@@ -7,6 +7,10 @@ import {normalizeState} from '../home-assistant/state-normalizer.js';
 import type {OllamaChatTransport} from '../ollama/client.js';
 import {selectAllowedEntities, type ResolvedEntityPolicy} from '../policy/resolver.js';
 import {createPlan} from './planner.js';
+import {
+	validateObservationConditions,
+	type ObservationConditionIssue,
+} from './observation-conditions.js';
 import {validatePlan, type PlanValidationResult} from './policy.js';
 import {selectRelevantContext, type SelectionOptions, type SelectionResult} from './relevance.js';
 import type {ConcretePlan} from './schemas.js';
@@ -15,6 +19,7 @@ import {createSetScopeContext, expandPlanIntents, expansionDiagnostics} from './
 export type PlanningPipelineResult = {
 	selection: SelectionResult;
 	permittedCount: number;
+	conditionIssue?: ObservationConditionIssue;
 	validatedPlan: PlanValidationResult;
 	executionReadiness: ExecutionReadinessResult;
 	intentExpansion: ReturnType<typeof expansionDiagnostics>;
@@ -79,7 +84,8 @@ export const runPlanningPipeline = async (
 		},
 		options.chat,
 	);
-	const expansion = expandPlanIntents(plan, entities, policy, {
+	const conditions = validateObservationConditions(plan, selection);
+	const expansion = expandPlanIntents(conditions.plan, entities, policy, {
 		entityIds: selection.contextEntityIds,
 		setScopes: selection.setScopes,
 		singleTarget: selection.reasons.some((reason) =>
@@ -92,6 +98,7 @@ export const runPlanningPipeline = async (
 
 	return {
 		selection,
+		...(conditions.issue !== undefined && {conditionIssue: conditions.issue}),
 		permittedCount: permitted.length,
 		validatedPlan,
 		executionReadiness,

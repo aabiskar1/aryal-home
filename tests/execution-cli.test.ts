@@ -565,3 +565,67 @@ describe('contextual subset execution boundary', () => {
 		},
 	);
 });
+
+it('returns the application-owned threshold explanation before execution for six OFF lights and a confident model set proposal', async () => {
+	env.DRY_RUN = true;
+	const lights = Array.from({length: 6}, (_, index) =>
+		state(`light.example_living_${index + 1}`, 'off'),
+	);
+	const sensor = state('sensor.example_illuminance', '48');
+	sensor.attributes = {
+		friendly_name: 'Example Illuminance',
+		device_class: 'illuminance',
+		unit_of_measurement: 'lx',
+	};
+	const readings = [...lights, sensor];
+	vi.mocked(getHomeAssistantStates).mockResolvedValue(readings);
+	vi.mocked(getHomeAssistantRegistries).mockResolvedValue({
+		status: 'available',
+		entities: readings.map(({entity_id: entityId}) => ({
+			entity_id: entityId,
+			area_id: 'example_living',
+			device_id: null,
+			labels: [],
+			disabled_by: null,
+		})),
+		devices: [],
+		areas: [{area_id: 'example_living', name: 'Living Room', aliases: [], labels: []}],
+		labels: [],
+	});
+	vi.mocked(loadEntityPolicy).mockResolvedValue({
+		version: 1,
+		allow: [{domain: 'light'}, {entityId: sensor.entity_id}],
+		deny: [],
+	});
+	vi.mocked(requestOllamaChat).mockResolvedValue(
+		JSON.stringify({
+			outcome: 'propose_actions',
+			summary: 'Proposed plan: Untrusted confident darkness marker.',
+			actions: [
+				{
+					type: 'set_action',
+					action: 'turn_on',
+					scope: {area: 'Living Room', domain: 'light'},
+					reason: 'The model calls 48 lx dark.',
+				},
+			],
+		}),
+	);
+	const result = await runExecutionCli('Turn on Living Room lights if dark');
+	expect(result).toMatchObject({
+		outcome: 'insufficient_context',
+		exitCode: 1,
+		planning: {
+			selection: {intentMode: 'mixed', selectedCount: 6, observationCount: 1},
+			conditionIssue: {reason: 'unresolved_illuminance_threshold'},
+			actions: [],
+		},
+		readiness: {commands: []},
+	});
+	expect(formatExecutionCliResult(result)).toContain(
+		'Illuminance is available, but no reliable darkness/brightness threshold',
+	);
+	expect(formatExecutionCliResult(result)).not.toContain('Untrusted confident darkness marker');
+	expect(executionSpy).not.toHaveBeenCalled();
+	expect(http.post).not.toHaveBeenCalled();
+});

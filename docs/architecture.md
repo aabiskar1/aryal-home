@@ -71,7 +71,7 @@ Existing explicit user-provided room facts continue to support semantic planning
 report insufficient context for conditions it cannot establish and must never infer a light action
 from occupancy alone or invent an automation.
 
-Illuminance is a finite numeric read-only measurement, typically in `lx`. “Illuminance”, “lux”,
+Illuminance is a finite numeric read-only measurement, typically in `lx`. “Illuminance”, “lux”, “lx”,
 “light level”, “how bright”, “how dark”, “brightness level”, and bounded “bright”, “dark”, or “dim”
 select the illuminance profile. “Light” by itself does not. Measurement phrases do not introduce
 lighting action context: “What is the Living Room light level?” and “How bright is the Living Room?”
@@ -81,8 +81,31 @@ light context and illuminance evidence. Missing required evidence fails closed w
 an area-specific requirement. Invalid selected evidence is never silently dropped in favor of a
 usable subset.
 
-There is no universal lux threshold in deterministic code. The model must return insufficient
-context if it cannot establish the user's condition. Illuminance does not grant brightness control:
+Measurement reporting and interpretation are separate. “How bright is the Living Room?” reports
+the supplied lux value with `no_action`, just like a light-level question; a threshold is not needed
+to report a reading. “Is it too dark?” requires a reliable interpretation criterion or preference,
+so the model should use `insufficient_context` if that criterion is absent. Informational mode still
+requires an empty actions array and the existing `Proposed plan:` summary contract.
+
+`validateObservationConditions()` is an application-owned post-schema validation gate in the
+planning pipeline, before entity/set intent expansion, policy validation, and readiness. No
+deterministic illuminance comparison mechanism exists. Whenever the selected context combines
+actionable states with illuminance evidence, this gate replaces the parsed model plan with
+`insufficient_context` and empty actions, regardless of model confidence or current light states.
+It preserves the complete mixed context and exposes a trusted `conditionIssue` diagnostic with
+`unresolved_illuminance_threshold`: illuminance is available, but no reliable darkness/brightness
+threshold has been established. This is distinct from `missing_observations`, which still rejects
+missing, denied, or unusable required evidence before model generation.
+
+Both qualitative conditions (“if dark”, “when dim”, “when bright”, “if the light level is low”) and
+explicit numeric lux thresholds fail closed. Numeric unit spellings such as `50 lx`, `50lx`, and
+`50lux` select the same illuminance profile after entity IDs and friendly names are masked.
+A number in an instruction does not implement a
+trusted comparator. This conservative gate also rejects combined control-and-illuminance-reporting
+requests; it does not attempt to infer that two clauses are independent. Ordinary unconditional
+light control without illuminance context and existing occupancy/presence conditions keep their
+existing validation and complete-set behavior. No universal threshold, implicit preference, or new
+execution permission is introduced. Illuminance does not grant brightness control:
 “Set lights to 50% brightness” gains no additional action or parameter support. “It is dark” alone
 provides no actionable targeting signal and cannot invent light context or unsolicited control.
 Informational answers continue to use the existing `Proposed plan:` summary contract.

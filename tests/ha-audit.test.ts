@@ -1,6 +1,7 @@
 import {describe, expect, it, vi} from 'vitest';
 import type {AuditData} from '../src/audit/collection.js';
 import {buildAuditInventory} from '../src/audit/inventory.js';
+import {deriveFixCandidates} from '../src/audit/fixes/planning.js';
 import {formatAuditReport} from '../src/audit/presentation.js';
 import {auditInventory, type AuditReport} from '../src/audit/rules.js';
 import {runHaAuditCli} from '../src/cli/ha-audit.js';
@@ -172,6 +173,7 @@ describe('deterministic Home Assistant metadata audit', () => {
 		state('binary_sensor.example_presence', 'Example Presence', 'on', 'presence'),
 		state('sensor.example_temperature', 'Example Temperature', '21.5', 'temperature'),
 		state('sensor.example_humidity', 'Example Humidity', '45', 'humidity'),
+		state('sensor.example_illuminance', 'Example Illuminance', '120', 'illuminance'),
 	])('reports usable $entity_id as read-only evidence with no action authority', (reading) => {
 		const data = fixture([reading]);
 		expect(findings(data, 'observation_readiness')[0]?.details).toMatchObject({
@@ -935,4 +937,71 @@ describe('read-only audit CLI', () => {
 		const result = await runHaAuditCli([], async () => data);
 		expect(result.exitCode).toBe(1);
 	});
+});
+
+describe('illuminance audit integration', () => {
+	it.each(['120.5', 'unknown', 'unavailable', 'NaN'])(
+		'uses shared normalization for %s',
+		(value) => {
+			const reading = state(
+				'sensor.example_illuminance',
+				'Example Illuminance',
+				value,
+				'illuminance',
+			);
+			reading.attributes.unit_of_measurement = 'lx';
+			const data = fixture([reading]);
+			const isValid = value === '120.5';
+			const readiness = findings(data, 'observation_readiness')[0]!;
+			expect(readiness.details).toMatchObject({
+				deviceClass: 'illuminance',
+				normalizable: isValid,
+				currentStateUsable: isValid,
+				hasArea: true,
+				policyExposed: !['unknown', 'unavailable'].includes(value),
+				eligibleForPlanning: isValid,
+			});
+			expect(readiness.details.omissionReasons).toEqual(
+				isValid ? [] : expect.arrayContaining(['unusable_observation_state']),
+			);
+			if (isValid) {
+				expect(readiness.details.unit).toBe('lx');
+			}
+
+			expect(findings(data, 'actionable_readiness')).toEqual([]);
+		},
+	);
+	it('keeps unexposed illuminance omission reasons and presentation modes', () => {
+		const data = fixture([
+			state('sensor.example_illuminance', 'Example Illuminance', '120', 'illuminance'),
+		]);
+		data.policy = {version: 1, allow: [{domain: 'light'}], deny: []};
+		const audit = report(data);
+		const readiness = audit.findings.find(({code}) => code === 'observation_readiness')!;
+		expect(readiness.details).toMatchObject({
+			normalizable: true,
+			policyExposed: false,
+			eligibleForPlanning: false,
+			omissionReasons: ['not_policy_permitted'],
+		});
+		expect(readiness.severity).toBe('info');
+		expect(formatAuditReport(audit, 'compact')).not.toContain('OBSERVATION_READINESS');
+		expect(formatAuditReport(audit, 'verbose')).toContain('OBSERVATION_READINESS');
+		expect(JSON.parse(formatAuditReport(audit, 'json'))).toEqual(
+			JSON.parse(JSON.stringify(audit, (_key, value: unknown) => value ?? null)),
+		);
+		expect(
+			deriveFixCandidates({data, policyText: JSON.stringify(data.policy), registryEvidence: {}})
+				.candidates,
+		).toEqual([]);
+	});
+});
+
+it('derives generic observation-class name hints from the registry without proposing sensor fixes', () => {
+	const data = fixture([state('sensor.example_illuminance', 'illuminance', '120', 'illuminance')]);
+	expect(findings(data, 'generic_friendly_name')).toHaveLength(1);
+	expect(
+		deriveFixCandidates({data, policyText: JSON.stringify(data.policy), registryEvidence: {}})
+			.candidates,
+	).toEqual([]);
 });

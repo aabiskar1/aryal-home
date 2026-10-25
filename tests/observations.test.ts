@@ -887,3 +887,290 @@ describe('model-facing projection and byte budget', () => {
 		expect(overflow.executionReadiness.commands).toEqual([]);
 	});
 });
+
+describe('illuminance relevance and planning boundaries', () => {
+	const reading = (entityId = 'sensor.example_living_illuminance', value = '12.5') =>
+		state(entityId, value, 'illuminance', 'lx');
+	const illuminanceFixture = (
+		readings = [reading()],
+		policy = allowedPolicy,
+		mutate?: (registry: AvailableRegistry) => void,
+	) => fixture([...defaultStates, ...readings], policy, mutate);
+
+	it.each([
+		'How bright is the Living Room?',
+		'What is the Living Room light level?',
+		'What is the Lounge illuminance?',
+		'How dark is the Lounge?',
+		'Living Room lux?',
+		'Living Room brightness level?',
+		'Is the Living Room dim?',
+	])('keeps %s informational', async (instruction) => {
+		const {result, context} = await run(instruction, illuminanceFixture());
+		expect(result.selection).toMatchObject({
+			kind: 'ready',
+			intentMode: 'observation_only',
+			states: [],
+			setScopes: [],
+		});
+		expect(context?.observations).toEqual([
+			expect.objectContaining({deviceClass: 'illuminance', state: '12.5', unit: 'lx'}),
+		]);
+		expect(result.executionReadiness.commands).toEqual([]);
+		if (result.selection.kind === 'ready') {
+			expect(result.selection.contextEntityIds.size).toBe(0);
+		}
+	});
+
+	it.each([
+		'Turn on the Living Room lights',
+		'Turn off Living Room light',
+		'Set the Living Room lights to 50% brightness',
+	])('does not add illuminance evidence or authority for %s', async (instruction) => {
+		const {result, context} = await run(instruction, illuminanceFixture());
+		expect(context?.observations).toEqual([]);
+		expect(context?.states).toHaveLength(3);
+		expect(result.executionReadiness.commands).toEqual([]);
+		expect(JSON.stringify(context)).not.toContain('brightness_pct');
+	});
+
+	it.each([
+		'Turn on the Living Room lights if it is dark',
+		'Turn off the Living Room lights when the room is bright',
+		'Turn off all Lounge lights if dim',
+	])('retains complete actionable scope with evidence for %s', async (instruction) => {
+		const shouldTurnOn = instruction.startsWith('Turn on');
+		const intent = {
+			...lightSetIntent,
+			action: shouldTurnOn ? ('turn_on' as const) : ('turn_off' as const),
+		};
+		const {result, context} = await run(instruction, illuminanceFixture(), [intent]);
+		expect(context?.states).toHaveLength(3);
+		expect(context?.observations).toHaveLength(1);
+		expect(result.intentExpansion.sets[0]?.matchedCount).toBe(3);
+		expect(result.intentExpansion.outcome).toBe('complete');
+		expect(result.executionReadiness.commands).toHaveLength(shouldTurnOn ? 1 : 2);
+		if (result.selection.kind === 'ready') {
+			expect(result.selection.contextEntityIds.has('sensor.example_living_illuminance')).toBe(
+				false,
+			);
+			expect(result.selection.setScopes).toEqual([
+				{area: 'Living Room', aliases: ['Lounge'], domain: 'light'},
+			]);
+		}
+	});
+
+	it.each(['', 'NaN', 'Infinity', '1e999', 'unknown', 'unavailable', '12 lx'])(
+		'fails closed for unusable illuminance %j',
+		async (value) => {
+			const {result, chat} = await run(
+				'Turn on Living Room lights if dark',
+				illuminanceFixture([reading(undefined, value)]),
+			);
+			expect(result.selection).toEqual({
+				kind: 'insufficient_context',
+				reason: 'missing_observations',
+			});
+			expect(chat).not.toHaveBeenCalled();
+		},
+	);
+
+	it.each([
+		'absent',
+		'denied',
+		'unexposed',
+		'other_room',
+		'no_area',
+		'invalid_member',
+		'missing_room',
+	])('requires complete permitted area evidence: %s', async (condition) => {
+		let readings = condition === 'absent' ? [] : [reading()];
+		if (condition === 'other_room') {
+			readings = [reading('sensor.example_bedroom_illuminance')];
+		} else if (condition === 'invalid_member') {
+			readings.push(reading('sensor.example_living_second_reading', 'invalid'));
+		}
+
+		const policy: EntityPolicy =
+			condition === 'denied'
+				? {...allowedPolicy, deny: [{entityId: 'sensor.example_living_illuminance'}]}
+				: condition === 'unexposed'
+					? {version: 1, allow: [{domain: 'light'}], deny: []}
+					: allowedPolicy;
+		const input = illuminanceFixture(readings, policy, (registry) => {
+			if (condition === 'no_area') {
+				registry.entities.find(({entity_id: id}) => id === readings[0]!.entity_id)!.area_id = null;
+			}
+		});
+		if (condition === 'no_area') {
+			// Remove the fallback too; a name never provides an area assignment.
+			input.entities.find(
+				({entityId}) => entityId === readings[0]!.entity_id,
+			)!.homeAssistantState.attributes.area_name = undefined;
+		}
+
+		const instruction =
+			condition === 'missing_room'
+				? 'Compare Living Room and Bedroom light level'
+				: 'How bright is the Living Room?';
+		const {result, chat} = await run(instruction, input);
+		expect(result.selection).toEqual({
+			kind: 'insufficient_context',
+			reason: 'missing_observations',
+		});
+		expect(chat).not.toHaveBeenCalled();
+		expect(result.executionReadiness.commands).toEqual([]);
+	});
+
+	it.each(['sensor.example_living_illuminance', 'Example example_living_illuminance'])(
+		'uses exact evidence target %s without action membership',
+		async (target) => {
+			const {result, context} = await run(`Check ${target}`, illuminanceFixture());
+			expect(context?.states).toEqual([]);
+			expect(context?.observations).toHaveLength(1);
+			expect(result.selection).toMatchObject({intentMode: 'observation_only'});
+		},
+	);
+
+	it.each(['light.example_dark_lamp', 'Dark Lamp', 'light.example_bright_lamp', 'Bright Lamp'])(
+		'does not infer an observation requirement from entity metadata %s',
+		async (target) => {
+			const raw = state('light.example_dark_lamp', 'off');
+			raw.attributes.friendly_name = 'Dark Lamp';
+			const other = state('light.example_bright_lamp', 'off');
+			other.attributes.friendly_name = 'Bright Lamp';
+			const {result, context} = await run(`Turn on ${target}`, fixture([raw, other]));
+			expect(result.selection).toMatchObject({kind: 'ready', intentMode: 'entity_only'});
+			expect(context?.observations).toEqual([]);
+		},
+	);
+
+	it('does not use substrings in names as evidence concepts or lighting authority', async () => {
+		const raw = reading();
+		raw.attributes.friendly_name = 'Example Bright Lights Meter';
+		const other = reading('sensor.example_living_second_reading');
+		const {result, context} = await run(
+			'Check Example Bright Lights Meter',
+			illuminanceFixture([raw, other]),
+		);
+		expect(context?.states).toEqual([]);
+		expect(context?.observations.map(({entityId}) => entityId)).toEqual([raw.entity_id]);
+		expect(result.selection).toMatchObject({intentMode: 'observation_only'});
+	});
+
+	it.each(['sensor.example_darkness', 'Example Brightness Meter'])(
+		'keeps metadata substrings bounded for %s',
+		async (target) => {
+			const raw = reading('sensor.example_darkness');
+			raw.attributes.friendly_name = 'Example Brightness Meter';
+			const {context} = await run(`Check ${target}`, illuminanceFixture([raw, reading()]));
+			expect(context?.observations.map(({entityId}) => entityId)).toEqual([raw.entity_id]);
+			expect(context?.states).toEqual([]);
+		},
+	);
+
+	it('does not invent action targets for a standalone dark scenario', async () => {
+		const {result, context} = await run('It is dark', illuminanceFixture());
+		expect(context?.states).toEqual([]);
+		expect(result.selection).toMatchObject({intentMode: 'observation_only'});
+		expect(result.executionReadiness.commands).toEqual([]);
+	});
+
+	it.each([
+		{entityId: 'light.example_living_first', action: 'turn_on', reason: 'Invented action.'},
+		{
+			entityId: 'sensor.example_living_illuminance',
+			action: 'turn_off',
+			reason: 'Forged sensor action.',
+		},
+		lightSetIntent,
+	])('rejects observation-only action proposals before expansion: %j', async (proposal) => {
+		await expect(
+			run('What is Living Room light level?', illuminanceFixture(), [proposal]),
+		).rejects.toBeInstanceOf(ZodError);
+	});
+
+	it('independently rejects sensor actions even with forged context membership', async () => {
+		const entityId = 'sensor.example_living_illuminance';
+		const input = illuminanceFixture();
+		const action: ProposedAction = {
+			entityId,
+			action: 'turn_on',
+			reason: 'Forged sensor authority.',
+		};
+		const {result} = await run('Turn on Living Room lights if dark', input, [action]);
+		expect(result.validatedPlan.rejectedActions[0]?.reason).toBe('not_in_context');
+		expect(
+			validatePlan(plan([action]), input.policy, new Set([entityId])).rejectedActions[0]?.reason,
+		).toBe('unsupported_action');
+		expect(result.executionReadiness.commands).toEqual([]);
+	});
+
+	it.each(['How bright is the Living Room?', 'Turn on Living Room lights if dark'])(
+		'accounts for the full serialized request and fails closed on overflow for %s',
+		async (instruction) => {
+			const input = illuminanceFixture();
+			const {result, request} = await run(instruction, input);
+			expect(result.selection.kind).toBe('ready');
+			if (result.selection.kind !== 'ready') {
+				return;
+			}
+
+			const bytes = Buffer.byteLength(
+				JSON.stringify(createOllamaChatPayload(request!, options.model)),
+			);
+			expect(result.selection.requestBytes).toBe(bytes);
+			const chat = vi.fn<OllamaChatTransport>(async () => JSON.stringify(plan()));
+			const exact = await runPlanningPipeline(instruction, input.entities, input.policy, {
+				...options,
+				maxRequestBytes: bytes + outputHeadroomBytes,
+				chat,
+			});
+			expect(exact.selection.kind).toBe('ready');
+			chat.mockClear();
+			const overflow = await runPlanningPipeline(instruction, input.entities, input.policy, {
+				...options,
+				maxRequestBytes: bytes + outputHeadroomBytes - 1,
+				chat,
+			});
+			expect(overflow.selection).toEqual({kind: 'insufficient_context', reason: 'over_budget'});
+			expect(chat).not.toHaveBeenCalled();
+		},
+	);
+});
+
+it('preserves light-only area targeting when an actionable friendly name contains the area and plural domain', async () => {
+	const light = state('light.example_living_named', 'off');
+	light.attributes.friendly_name = 'Living Room Lights';
+	const plug = state('switch.example_living_other', 'off');
+	const {context} = await run('Turn on Living Room lights', fixture([light, plug]));
+	expect(context?.states.map(({entityId}) => entityId)).toEqual([light.entity_id]);
+	expect(context?.observations).toEqual([]);
+});
+
+it('does not accept brightness actions or service parameters from illuminance context', async () => {
+	const input = fixture([
+		...defaultStates,
+		state('sensor.example_living_illuminance', '25', 'illuminance', 'lx'),
+	]);
+	const chat = vi.fn<OllamaChatTransport>(async () =>
+		JSON.stringify({
+			...plan(),
+			outcome: 'propose_actions',
+			actions: [
+				{
+					entityId: 'light.example_living_first',
+					action: 'turn_on',
+					reason: 'Unsupported dimming.',
+					brightness_pct: 50,
+				},
+			],
+		}),
+	);
+	await expect(
+		runPlanningPipeline('Set Living Room lights to 50% brightness', input.entities, input.policy, {
+			...options,
+			chat,
+		}),
+	).rejects.toBeInstanceOf(ZodError);
+});

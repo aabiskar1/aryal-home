@@ -26,15 +26,39 @@ question in the summary. Invalid control proposals are rejected before intent ex
 converted into success. Existing policy/context validation remains a separate defense. Conditional
 control requests with actionable states retain their existing entity, mixed, or set planning mode.
 
-The initial evidence catalogue is intentionally narrow: binary sensors with `occupancy` or
-`presence` device classes and sensors with `temperature` or `humidity` device classes. Binary
-observations must report `on`/`off`; numeric observations must report a finite decimal number.
-No class is inferred from a sensor's name. Unknown/unavailable, disabled, and incomplete entities
-retain existing policy exclusions. Conclusive legacy policies retain their REST-only planning
-fallback when registries are unavailable; registry-dependent selectors still fail closed.
+The immutable `src/observations/registry.ts` catalogue is the source of truth for exact Home
+Assistant domain/device-class pairs, value kinds, and semantic profiles. Supported definitions are
+`binary_sensor` / `occupancy` and `presence`, plus `sensor` / `temperature`, `humidity`, and
+`illuminance`. Occupancy and presence share one presence evidence profile. The device-class Zod
+schema and TypeScript union derive from the catalogue; there is no separate synchronized list.
 
-Relevance selection matches explicit evidence targets or a small presence/temperature/humidity
-vocabulary and uses area names/aliases or the actionable target's area to narrow evidence.
+Binary normalization accepts only exact `on`/`off`. Numeric normalization accepts finite signed,
+decimal, or exponent strings and preserves the original state string; empty, malformed, non-finite,
+unknown, and unavailable readings are unusable. Numeric units retain existing validation (trimmed,
+nonempty strings up to 16 characters); binary evidence omits units. No arbitrary attributes enter
+`ObservationState`. No class is inferred from a sensor's name, including names containing luminance.
+Unknown/unavailable, disabled, and incomplete entities retain existing policy exclusions. Conclusive
+legacy policies retain their REST-only planning fallback when registries are unavailable;
+registry-dependent selectors still fail closed.
+
+The dependency direction is normalization → registry, observation projection → normalization types
+and registry, relevance → registry and projection, and audit inventory → normalization and projection.
+The registry depends only on Zod. It imports no planner, projection, policy, or execution module.
+
+To register a future supported class, add one compile-time definition with an exact domain and
+`deviceClass`, `kind: 'numeric'` or `'binary'`, and a semantic profile containing an ID and narrowly
+bounded phrases. Reuse an existing profile for interchangeable evidence. The kind selects the common
+deterministic parser; a new class needs no class-specific branch in normalization, projection,
+relevance, or audit. Add class-specific safety and regression tests and document supported semantics.
+The internal constructor freezes the catalogue and derives lookup/schema data; it is not a user
+configuration or plugin interface. Registration grants no exposure: the existing explicit policy
+permission is still required. No sensor selectors are automatically added.
+
+Relevance selection matches explicit evidence targets or the registered conservative phrases, using
+Unicode tokenization and whole phrase boundaries. Entity IDs are removed from concept matching, and
+matched friendly names are metadata rather than generic concept signals. “No one”, “no-one”, “noone”,
+and “nobody” retain presence matching without rewriting the user's instruction sent to the model.
+Area names/aliases or the actionable target's area narrow evidence.
 Ambiguous fallback does not automatically include observations. Observation questions and recognized
 conditional goals require the requested profiles; observation questions require evidence for every
 matched requested area, and conditional room actions require evidence for each selected actionable
@@ -46,6 +70,22 @@ still fails closed, including when it names a room or accompanies a broader coll
 Existing explicit user-provided room facts continue to support semantic planning. The model must
 report insufficient context for conditions it cannot establish and must never infer a light action
 from occupancy alone or invent an automation.
+
+Illuminance is a finite numeric read-only measurement, typically in `lx`. “Illuminance”, “lux”,
+“light level”, “how bright”, “how dark”, “brightness level”, and bounded “bright”, “dark”, or “dim”
+select the illuminance profile. “Light” by itself does not. Measurement phrases do not introduce
+lighting action context: “What is the Living Room light level?” and “How bright is the Living Room?”
+use `observation_only`, while “Turn on Living Room lights if it is dark” retains the complete relevant
+light context and illuminance evidence. Missing required evidence fails closed with
+`missing_observations` before calling the model. Different-room or unassigned evidence cannot satisfy
+an area-specific requirement. Invalid selected evidence is never silently dropped in favor of a
+usable subset.
+
+There is no universal lux threshold in deterministic code. The model must return insufficient
+context if it cannot establish the user's condition. Illuminance does not grant brightness control:
+“Set lights to 50% brightness” gains no additional action or parameter support. “It is dark” alone
+provides no actionable targeting signal and cannot invent light context or unsolicited control.
+Informational answers continue to use the existing `Proposed plan:` summary contract.
 
 Every selected observation counts toward the existing complete serialized Ollama request budget,
 including the prompt/schema and output headroom. An over-budget context is rejected as a whole;

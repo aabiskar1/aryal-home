@@ -121,12 +121,28 @@ describe('deterministic advisory estimation', () => {
 			context: {
 				...event.context,
 				daylight: index === 0 ? ('daylight' as const) : ('night' as const),
+				timeOfDay: index === 0 ? ('morning' as const) : ('evening' as const),
 			},
 		}));
 		const result = estimateLightingPreference(events);
 		expect(result).toMatchObject({
 			assessment: 'suggestion_available',
 			contextGrouping: 'insufficient_samples',
+		});
+		expect(result.estimatedLux).toBeDefined();
+		expect(result.contextGroups).toContainEqual({
+			dimension: 'daylight',
+			category: 'daylight',
+			episodes: 1,
+			days: 1,
+			medianLux: events[0]!.lux,
+		});
+		expect(result.contextGroups).toContainEqual({
+			dimension: 'timeOfDay',
+			category: 'morning',
+			episodes: 1,
+			days: 1,
+			medianLux: events[0]!.lux,
 		});
 		expect(result).not.toHaveProperty('confidence');
 	});

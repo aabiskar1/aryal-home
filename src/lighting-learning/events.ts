@@ -194,15 +194,15 @@ const groupCandidates = (
 		episodes.push(episode);
 	}
 
-	let previousIndependent = -Infinity;
+	let previousEpisodeTimestamp = -Infinity;
 	for (const episode of episodes) {
-		if (episode.timestamp - previousIndependent < EVENT_LIMITS.independenceMs) {
+		if (episode.timestamp - previousEpisodeTimestamp < EVENT_LIMITS.independenceMs) {
 			episode.independent = false;
 		}
 
-		if (episode.independent) {
-			previousIndependent = episode.timestamp;
-		} else {
+		// Every observed episode advances the baseline, including non-independent episodes.
+		previousEpisodeTimestamp = episode.timestamp;
+		if (!episode.independent) {
 			exclude('independence_unestablished');
 		}
 

@@ -104,7 +104,9 @@ membership or authorize reading denied/other-room members. Member changes sharin
 history context ID within five seconds collapse to one episode. Similar timing without
 shared context establishes neither one action nor independent decisions: events stay
 descriptive with independence unestablished. Remaining candidates require 30-minute
-separation for statistical independence. Unrecognized groups cannot be inferred from names.
+separation from the immediately preceding observed episode for statistical independence,
+even when that preceding episode was non-independent. Spacing never restores independence
+rejected for another reason. Unrecognized groups cannot be inferred from names.
 
 Each candidate uses the latest actual sensor record strictly before the event, at most
 five minutes old by `last_changed`, with exact illuminance class, `lx`, and a finite nonnegative value.
@@ -141,7 +143,9 @@ four samples across two dates. Supported group medians differing by more than
 `max(10 lx, estimate * 0.5)` prevent a pooled suggestion. Context is assessed on all usable
 evidence before outlier removal can hide a minority pattern. Smaller groups are insufficient
 for comparison; no separate thresholds are fitted. No confidence percentage is invented,
-and additional metadata never raises confidence by itself.
+and additional metadata never raises confidence by itself. An otherwise stable advisory
+suggestion may still report `contextGrouping: insufficient_samples`; this means contextual
+patterns have not all been validated and is not a high-confidence assessment.
 
 Historical weather/cloud correlation is **deferred**, explicitly `not_collected`. No weather
 history, current conditions, forecasts or external services are used. Missing weather alone

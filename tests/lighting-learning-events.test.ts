@@ -6,6 +6,7 @@ import {
 	type HistorySample,
 } from '../src/lighting-learning/events.js';
 import type {HistoricalLogEntry} from '../src/home-assistant/history-schemas.js';
+import {estimateLightingPreference} from '../src/lighting-learning/estimator.js';
 import {at, historical, lightId, location, lux, transition} from './lighting-learning-fixture.js';
 
 const analyse = (
@@ -126,6 +127,85 @@ describe('historical lighting transitions', () => {
 	it('enforces a 30-minute independence separation', () => {
 		const rows = [...transition(), ...transition('2026-10-10T20:20:00Z')];
 		expect(analyse(rows).episodes.map((event) => event.independent)).toEqual([true, false]);
+	});
+	it.each([
+		{times: ['20:00', '20:20', '20:40'], expected: [true, false, false], exclusions: 2},
+		{times: ['20:00', '20:20', '20:51'], expected: [true, false, true], exclusions: 1},
+		{times: ['20:00', '20:30', '21:00'], expected: [true, true, true], exclusions: 0},
+	])(
+		'measures spacing from the immediately preceding episode: $times',
+		({times, expected, exclusions}) => {
+			const rows = times.flatMap((time) => transition(`2026-10-10T${time}:00Z`));
+			const result = analyse(reordered(rows));
+			expect(result.episodes.map((event) => event.timestamp)).toEqual(
+				times.map((time) => at(`2026-10-10T${time}:00Z`)),
+			);
+			expect(result.episodes.map((event) => event.independent)).toEqual(expected);
+			expect(result.excluded.independence_unestablished ?? 0).toBe(exclusions);
+		},
+	);
+	it('uses a collapsed shared-context episode as the next spacing baseline even when non-independent', () => {
+		const sharedContext = {id: 'example-shared', parent_id: null, user_id: null};
+		const middle = '2026-10-10T20:20:00Z';
+		const shared = (id: string) =>
+			transition(middle, id).map((row) => ({...row, context: sharedContext}));
+		const rows = [...transition(), ...shared(lightId), ...transition('2026-10-10T20:40:00Z')];
+		const lights = new Map([
+			[lightId, rows],
+			['light.example_second', shared('light.example_second')],
+		]);
+		const result = analyse(rows, [lux()], {lights});
+		expect(result.episodes.map((event) => event.independent)).toEqual([true, false, false]);
+		expect(result.episodes[1]?.entityIds).toHaveLength(2);
+		expect(result.excluded.shared_context_collapsed).toBe(1);
+		expect(result.excluded.independence_unestablished).toBe(2);
+	});
+	it('advances the baseline for simultaneous episodes already marked non-independent', () => {
+		const rows = [
+			...transition(),
+			...transition('2026-10-10T20:20:00Z'),
+			...transition('2026-10-10T20:51:00Z'),
+		];
+		const lights = new Map([
+			[lightId, rows],
+			['light.example_second', transition(undefined, 'light.example_second')],
+		]);
+		const result = analyse(rows, [lux()], {lights});
+		expect(result.episodes.map((event) => event.independent)).toEqual([false, false, false, true]);
+		expect(result.excluded.independence_unestablished).toBe(3);
+	});
+	it('does not restore independence to simultaneous changes even after a long gap', () => {
+		const later = '2026-10-10T21:00:00Z';
+		const rows = [...transition(), ...transition(later)];
+		const lights = new Map([
+			[lightId, rows],
+			['light.example_second', transition(later, 'light.example_second')],
+		]);
+		const result = analyse(rows, [lux()], {lights});
+		expect(result.episodes.map((event) => event.independent)).toEqual([true, false, false]);
+		expect(result.excluded.independence_unestablished).toBe(2);
+	});
+	it.each([
+		{userId: null, provenance: 'unknown_origin'},
+		{userId: 'example-user', provenance: 'user_attributed_origin_unverified'},
+	])('does not promote $provenance when spacing is sufficient', ({userId, provenance}) => {
+		const rows = ['20:00', '20:31', '21:02'].flatMap((time) =>
+			transition(`2026-10-10T${time}:00Z`).map((row) => ({
+				...row,
+				context: {id: `example-${time}`, parent_id: null, user_id: userId},
+			})),
+		);
+		const result = analyse(rows);
+		expect(result.episodes.map((event) => event.independent)).toEqual([true, true, true]);
+		expect(result.episodes.map((event) => event.provenance)).toEqual([
+			provenance,
+			provenance,
+			provenance,
+		]);
+		expect(estimateLightingPreference(result.episodes)).toMatchObject({
+			assessment: 'ambiguous_event_provenance',
+			reliableEpisodes: 0,
+		});
 	});
 	it.each(['NaN', 'Infinity', '-1', '0x20', '', 'unknown', 'unavailable', 'a lot'])(
 		'rejects unusable lux %s',

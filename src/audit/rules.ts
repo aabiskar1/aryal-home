@@ -1,3 +1,4 @@
+import {observationRegistry} from '../observations/registry.js';
 import {compareText, type AuditEntity, type AuditInventory} from './inventory.js';
 
 export type AuditFinding = {
@@ -168,10 +169,7 @@ const genericNames = new Set([
 	'light',
 	'switch',
 	'sensor',
-	'temperature',
-	'humidity',
-	'occupancy',
-	'presence',
+	...observationRegistry.definitions.map(({deviceClass}) => deviceClass),
 ]);
 const suspiciousTerms = new Set(['status', 'indicator', 'diagnostic', 'debug']);
 

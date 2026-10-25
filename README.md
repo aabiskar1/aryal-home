@@ -76,7 +76,7 @@ connection retrieves entity, device, area, and label registries for internal pol
 Registry-only entries never become controllable entities. Opaque registry IDs and raw registry
 payloads are not sent to Ollama; a validated effective-area display name may be included for a
 selected entity. Relevance selection runs only after policy resolution and never grants permission.
-Actionable lights/switches and read-only occupancy/presence or temperature/humidity observations are
+Actionable lights/switches and read-only occupancy/presence or temperature/humidity/illuminance observations are
 distinct model context lists. Observation exposure requires the existing allow/deny policy and grants
 no execution authority. See [planning context and execution authority](docs/architecture.md).
 
@@ -159,8 +159,20 @@ Selection is deterministic and uses no extra model call or external service. It 
 entity IDs and friendly names, validated effective-area names and aliases, and a small set of
 domain terms. For example, “Turn on kitchen lights” selects permitted kitchen lights; “Turn off
 all lights” selects every permitted light; and “Turn on bedroom lamp” can select a named lamp.
-Presence/occupancy, temperature, and humidity requests select relevant permitted read-only observations
+Presence/occupancy, temperature, humidity, and illuminance requests select relevant permitted read-only observations
 in a separate evidence list, narrowed by area where possible. Motion alone is not proof of presence.
+The shared [observation registry](src/observations/registry.ts) defines exact domain/device-class
+support, binary or numeric normalization, and conservative relevance phrases. “How bright is the
+Living Room?” and “What is the Living Room light level?” are informational observation-only requests.
+“Turn on Living Room lights if it is dark” retains light context and requires permitted illuminance
+evidence for that room. The application then rejects illumination-dependent control with
+`insufficient_context` / `unresolved_illuminance_threshold`: no deterministic darkness/brightness
+comparison is implemented, even for a numeric threshold in the instruction. The same conservative
+gate rejects combined control-and-illuminance-reporting requests. “How bright” questions report the
+available lux measurement without needing a threshold; interpreting “too dark” requires a reliable
+criterion. “Light” alone remains a lighting term; illuminance adds no brightness-control
+capability. There is no automatic lux threshold, unsolicited control, or background automation.
+See [observation registration and boundaries](docs/architecture.md) for extension guidance.
 
 An instruction without a clear target, such as “I'm going to bed,” conservatively includes all
 permitted actionable entities. Observations require an explicit target or relevant vocabulary;

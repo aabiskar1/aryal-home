@@ -70,7 +70,13 @@ not audit failures. Access/validation failures still prevent completion.
   entity references. Intentional deny entries need not be removed.
 
 Every supported observation has an informational readiness finding. Support means binary sensors
-with occupancy/presence device classes or sensors with temperature/humidity classes. Normalizability
+with occupancy/presence device classes or sensors with temperature/humidity/illuminance classes.
+Audit uses the same observation-definition registry through normalization and observation projection;
+it maintains no separate class catalogue. Illuminance requires exact `device_class: illuminance`, a
+finite numeric state, and existing explicit policy exposure for planning. Units (typically `lx`),
+area readiness, policy eligibility, and omission reasons use the existing finding fields. A name
+containing “luminance” does not establish support. No automatic illuminance fixes or exposure grants
+are offered; compact, verbose, JSON, severity, and remediation rules are unchanged. Normalizability
 and usable state follow the existing `ObservationState` projection: binary `on`/`off` or a finite
 numeric reading. Unsupported classes receive no observation-readiness finding.
 Invalid supported readings have a separate relevance-ranked `unusable_observation_state` finding;

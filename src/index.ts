@@ -28,6 +28,10 @@ const main = async (instruction: string): Promise<void> => {
 	console.log(`Discovered ${discoveredEntities.length} entities.`);
 	console.log(`Resolved ${result.permittedCount} allowed entities.`);
 	console.log('Selection diagnostics:', selectionDiagnostic(selection, result.permittedCount));
+	if (result.conditionIssue !== undefined) {
+		console.log('Condition validation:', JSON.stringify(result.conditionIssue));
+	}
+
 	console.log('Semantic set expansion diagnostics:');
 	console.log(JSON.stringify(result.intentExpansion, undefined, 2));
 	console.log(`Validated plan outcome: ${validatedPlan.outcome}.`);

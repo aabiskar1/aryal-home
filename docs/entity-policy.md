@@ -57,7 +57,7 @@ both full-policy permission and membership in the exact selected model context.
 The same explicit allow/deny selectors govern observation exposure to the local model. For example,
 an allow for `binary_sensor.example_occupancy` can expose its occupancy fact; it cannot permit a
 service call to that entity. Denies still override allows. Only normalized `occupancy`/`presence`
-binary sensors and `temperature`/`humidity` sensors are supported as observations.
+binary sensors and `temperature`/`humidity`/`illuminance` sensors are supported as observations.
 
 Selected evidence is sent in a separate `observations` array without supported actions or service
 routing. Observation IDs are excluded from actionable context membership, set scopes, and readiness.

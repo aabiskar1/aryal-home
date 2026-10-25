@@ -1,4 +1,4 @@
-import {z} from 'zod';
+import {observationDeviceClassSchema, normalizeObservationUnit} from '../observations/registry.js';
 import type {DiscoveredEntity} from './discovery.js';
 import {getSupportedActions, type CanonicalAction} from './capabilities.js';
 
@@ -12,15 +12,6 @@ export type NormalizedEntityState = {
 	unit?: string | undefined;
 	supportedActions: CanonicalAction[];
 };
-
-export const observationDeviceClassSchema = z.enum([
-	'presence',
-	'occupancy',
-	'temperature',
-	'humidity',
-]);
-export type ObservationDeviceClass = z.infer<typeof observationDeviceClassSchema>;
-const unitSchema = z.string().trim().min(1).max(16);
 
 const getStringAttribute = (
 	attributes: Record<string, unknown>,
@@ -36,7 +27,7 @@ export const normalizeState = (entity: DiscoveredEntity): NormalizedEntityState 
 	const deviceClass = observationDeviceClassSchema.safeParse(
 		homeAssistantState.attributes.device_class,
 	);
-	const unit = unitSchema.safeParse(homeAssistantState.attributes.unit_of_measurement);
+	const unit = normalizeObservationUnit(homeAssistantState.attributes.unit_of_measurement);
 
 	return {
 		entityId: entity.entityId,
@@ -49,7 +40,7 @@ export const normalizeState = (entity: DiscoveredEntity): NormalizedEntityState 
 					getStringAttribute(homeAssistantState.attributes, 'area_name'))
 				: getStringAttribute(homeAssistantState.attributes, 'area_name'),
 		deviceClass: deviceClass.success ? deviceClass.data : undefined,
-		unit: unit.success ? unit.data : undefined,
+		unit,
 		supportedActions:
 			homeAssistantState.state === 'unavailable' ||
 			homeAssistantState.state === 'unknown' ||

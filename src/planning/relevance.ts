@@ -1,3 +1,4 @@
+import {observationRegistry, type ObservationProfile} from '../observations/registry.js';
 import type {NormalizedEntityState} from '../home-assistant/state-normalizer.js';
 import {getSupportedActions} from '../home-assistant/capabilities.js';
 import {getPlanningIntentMode, planningRequestBytes} from './planner.js';
@@ -41,21 +42,6 @@ const domainTerms = {
 	switch: ['switch', 'switches', 'plug', 'plugs', 'outlet', 'outlets'],
 } as const;
 
-const presenceTerms = [
-	'anyone',
-	'anybody',
-	'someone',
-	'no one',
-	'who is home',
-	'presence',
-	'occupancy',
-	'occupied',
-	'unoccupied',
-	'empty',
-	'vacant',
-];
-const temperatureTerms = ['temperature', 'temperatures', 'temp'];
-const humidityTerms = ['humidity', 'humid'];
 const broadTerms = ['all', 'every', 'each', 'whole', 'entire'];
 const actionTerms = new Set([
 	'turn',
@@ -167,37 +153,46 @@ const areaCandidates = (
 	);
 };
 
-type ObservationProfile = 'presence' | 'temperature' | 'humidity';
-
-// Tokenization already maps "no-one" to "no one". Canonicalize the remaining variants
-// only for evidence matching, without changing entity/area matching or the model instruction.
-const normalizePresenceLanguage = (instruction: string): string =>
-	instruction
-		.split(' ')
-		.map((word) => (word === 'noone' || word === 'nobody' ? 'no one' : word))
-		.join(' ');
-
-const observationProfiles = (instruction: string): ObservationProfile[] => {
-	const profiles: ObservationProfile[] = [];
-	if (hasAnyPhrase(normalizePresenceLanguage(instruction), presenceTerms)) {
-		profiles.push('presence');
-	}
-
-	if (hasAnyPhrase(instruction, temperatureTerms)) {
-		profiles.push('temperature');
-	}
-
-	if (hasAnyPhrase(instruction, humidityTerms)) {
-		profiles.push('humidity');
-	}
-
-	return profiles;
-};
+const observationProfiles = (instruction: string): ObservationProfile[] => [
+	...new Set(
+		observationRegistry.definitions
+			.filter(({profile}) => hasAnyPhrase(instruction, profile.phrases))
+			.map(({profile}) => profile.id),
+	),
+];
 
 const hasProfile = (deviceClass: string | undefined, profile: ObservationProfile): boolean =>
-	profile === 'presence'
-		? deviceClass === 'occupancy' || deviceClass === 'presence'
-		: deviceClass === profile;
+	observationRegistry.definitions.some(
+		(definition) => definition.deviceClass === deviceClass && definition.profile.id === profile,
+	);
+
+// Matched names are metadata. Remove complete bounded phrases only for concept matching.
+const withoutEntityNames = (instruction: string, candidates: RelevanceCandidate[]): string => {
+	const names = candidates
+		.flatMap(({state}) => (state.name === undefined ? [] : [normalize(state.name)]))
+		.filter((name) => name.length > 0)
+		.toSorted((a, b) => b.length - a.length);
+	let remaining = ` ${instruction} `;
+	for (const name of names) {
+		remaining = remaining.replaceAll(` ${name} `, ' ');
+	}
+
+	return normalize(remaining);
+};
+
+// A measurement phrase such as "light level" is not an actionable domain mention.
+const withoutObservationPhrases = (instruction: string): string => {
+	const phrases = observationRegistry.definitions
+		.flatMap(({profile}) => profile.phrases)
+		.map((phrase) => normalize(phrase))
+		.toSorted((a, b) => b.length - a.length);
+	let remaining = ` ${instruction} `;
+	for (const phrase of phrases) {
+		remaining = remaining.replaceAll(` ${phrase} `, ' ');
+	}
+
+	return normalize(remaining);
+};
 
 const hasUnresolvedQualifier = (instruction: string): boolean => {
 	if (!/^(?:turn on|turn off|switch on|switch off|enable|disable) /v.test(instruction)) {
@@ -224,6 +219,7 @@ const chooseCandidates = (
 	instruction: string,
 	candidates: RelevanceCandidate[],
 	hasEvidenceTarget: boolean,
+	domainInstruction: string,
 ): CandidateChoice => {
 	const explicitIds = exactEntityIds(instruction).filter(
 		(id) => getSupportedActions(id.split('.', 1)[0]!.toLowerCase()).length > 0,
@@ -257,7 +253,7 @@ const chooseCandidates = (
 	}
 
 	const domains = Object.entries(domainTerms)
-		.filter(([, terms]) => hasAnyPhrase(normalizedInstruction, terms))
+		.filter(([, terms]) => hasAnyPhrase(domainInstruction, terms))
 		.map(([domain]) => domain);
 	if (domains.length === 0 && hasEvidenceTarget) {
 		return {selected: [], mode: 'targeted', reason: 'observation'};
@@ -354,7 +350,12 @@ export const selectRelevantContext = (
 	const actionable = candidates.filter(({state}) => getSupportedActions(state.domain).length > 0);
 	const observational = candidates.filter(({state}) => isObservationCandidate(state));
 	const normalizedInstruction = instructionText(instruction);
-	const profiles = observationProfiles(normalizedInstruction);
+	// Recognize numeric unit spellings such as 50lx only after IDs/names are masked.
+	const semanticInstruction = withoutEntityNames(normalizedInstruction, candidates).replaceAll(
+		/(?<=\d)(?=lx\b|lux\b)/gv,
+		' ',
+	);
+	const profiles = observationProfiles(semanticInstruction);
 	const explicitIds = exactEntityIds(instruction).map((id) => id.toLowerCase());
 	const areas = areaCandidates(normalizedInstruction, [...actionable, ...observational]);
 	const namedObservations = observational.filter(
@@ -367,6 +368,7 @@ export const selectRelevantContext = (
 		instruction,
 		actionable,
 		profiles.length > 0 || hasObservationTarget || explicitIds.length > 0,
+		withoutObservationPhrases(withoutEntityNames(normalizedInstruction, observational)),
 	);
 	const isSingleTarget = ['exact_entity', 'friendly_name'].includes(choice.reason);
 

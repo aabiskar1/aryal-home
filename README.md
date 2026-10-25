@@ -15,6 +15,12 @@ It integrates with Home Assistant and locally hosted language models to interpre
 reason about contextual information, and propose actions within explicitly defined security
 boundaries.
 
+An explicitly invoked [advisory lighting history analysis](docs/lighting-learning.md) inspects
+permitted room lights and illuminance evidence without controlling devices or activating
+preferences: `npm run learn-lighting -- --area "Example Room" --days 10` after building.
+It reports insufficient evidence when direct user interaction cannot be established; current
+REST account attribution alone cannot produce a threshold suggestion.
+
 Home Assistant remains the source of truth. The model receives only explicitly permitted,
 normalized state and produces structured entity or set intents. Application code expands validated
 area/domain scopes into every permitted matching entity, then checks deterministic entity policy

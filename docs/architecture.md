@@ -1,5 +1,13 @@
 # Planning context and execution authority
 
+The separate [advisory lighting learner](lighting-learning.md) reuses read-only discovery,
+registry metadata and policy resolution, then collects bounded entity-filtered REST history
+and logbook data. Event identification, historical solar/local-time enrichment, statistical
+estimation and aggregate presentation remain separate modules. The REST collector cannot
+establish direct human interaction from account attribution and cannot currently produce
+threshold suggestions. No learning result is stored or consumed by planning, readiness or
+execution; the illuminance refusal remains unchanged.
+
 The separate [metadata audit](ha-audit.md) collects only current states, read-only registry lists,
 and local policy. Pure inventory projection and deterministic findings support maintenance without
 invoking model planning or execution. Audit suggestions grant no area, policy, or action authority

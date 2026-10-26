@@ -51,9 +51,10 @@ export const buildThresholdReport = async (input: {
 	};
 	if (mode === 'suggest') {
 		const days = input.days ?? 3;
-		if (input.client === undefined || current.assessment === 'insufficient_context') {
-			report.evidence = emptyAmbientEvidence(days, 'current_sensor_unavailable_or_invalid');
+		if (input.client === undefined) {
+			report.evidence = emptyAmbientEvidence(days, 'history_client_unavailable');
 		} else {
+			// History has its own eligibility checks and never supplies a current measurement.
 			Object.assign(
 				report,
 				await collectAmbientHistory({

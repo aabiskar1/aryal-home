@@ -6,7 +6,15 @@ import {
 } from '../src/lighting-thresholds/history.js';
 import {resolveThresholdRoom} from '../src/lighting-thresholds/room.js';
 import {buildThresholdReport} from '../src/lighting-thresholds/recommendation.js';
-import {auditData, historical, lightId, location, lux, at} from './lighting-learning-fixture.js';
+import {
+	auditData,
+	historical,
+	lightId,
+	sensorId,
+	location,
+	lux,
+	at,
+} from './lighting-learning-fixture.js';
 
 const start = at('2026-10-10T00:00:00Z');
 const end = at('2026-10-12T00:00:00Z');
@@ -159,6 +167,123 @@ describe('ambient history checks without learned preferences', () => {
 });
 
 describe('bounded history collection and practical default fallback', () => {
+	it.each([
+		{condition: 'stale', reason: 'stale_measurement'},
+		{condition: 'invalid', reason: 'invalid_illuminance'},
+		{condition: 'missing_unit', reason: 'invalid_or_missing_measurement'},
+	])(
+		'keeps $condition current evidence separate from available history',
+		async ({condition, reason}) => {
+			const data = auditData();
+			data.states[1]!.last_updated = new Date(end).toISOString();
+			if (condition === 'invalid') {
+				data.states[1]!.state = 'NaN';
+			} else if (condition === 'missing_unit') {
+				delete data.states[1]!.attributes.unit_of_measurement;
+			}
+
+			const transport = client();
+			const report = await buildThresholdReport({
+				room: resolveThresholdRoom(data, 'Example Room'),
+				mode: 'suggest',
+				configuredLux: undefined,
+				days: 2,
+				now: end,
+				client: transport,
+			});
+			expect(report.current).toEqual({assessment: 'insufficient_context', reason});
+			expect(report.evidence).toMatchObject({
+				status: 'starting_point_within_observed_range',
+				halfHourBins: 16,
+				localDays: 2,
+			});
+			expect(report.suggestedLux).toBe(40);
+			expect(transport.history).toHaveBeenCalledTimes(2);
+		},
+	);
+	it('labels unavailable history independently of a stale current reading', async () => {
+		const transport = client();
+		transport.history.mockRejectedValue(new Error('private error'));
+		const report = await buildThresholdReport({
+			room: resolveThresholdRoom(auditData(), 'Example Room'),
+			mode: 'suggest',
+			configuredLux: undefined,
+			now: end,
+			client: transport,
+		});
+		expect(report.current).toEqual({
+			assessment: 'insufficient_context',
+			reason: 'stale_measurement',
+		});
+		expect(report.evidence).toMatchObject({
+			status: 'history_or_solar_context_unavailable',
+			halfHourBins: 0,
+			contextCoverage: 'unavailable',
+		});
+		expect(transport.history).toHaveBeenCalledTimes(1);
+		expect(JSON.stringify(report)).not.toContain('private error');
+	});
+	it.each(['denied', 'disabled', 'unapproved', 'wrong_room', 'unknown_area', 'missing_metadata'])(
+		'never queries a sensor with %s eligibility',
+		async (condition) => {
+			const data = auditData();
+			if (data.registries.status !== 'available') {
+				throw new Error('fixture');
+			}
+
+			const entry = data.registries.entities[1]!;
+			switch (condition) {
+				case 'denied': {
+					data.policy!.deny.push({entityId: sensorId});
+
+					break;
+				}
+
+				case 'disabled': {
+					entry.disabled_by = 'user';
+
+					break;
+				}
+
+				case 'unapproved': {
+					data.policy!.allow = [{domain: 'light'}];
+
+					break;
+				}
+
+				case 'missing_metadata': {
+					data.registries.entities.pop();
+
+					break;
+				}
+
+				default: {
+					entry.area_id = 'other_area';
+					if (condition === 'wrong_room') {
+						data.registries.areas.push({
+							area_id: 'other_area',
+							name: 'Other Room',
+							aliases: [],
+							labels: [],
+						});
+					}
+				}
+			}
+
+			const transport = client();
+			const report = await buildThresholdReport({
+				room: resolveThresholdRoom(data, 'Example Room'),
+				mode: 'suggest',
+				configuredLux: undefined,
+				now: end,
+				client: transport,
+			});
+			expect(report.current.assessment).toBe('insufficient_context');
+			expect(report.evidence?.status).toBe('incomplete_sensor_or_light_coverage');
+			expect(transport.config).not.toHaveBeenCalled();
+			expect(transport.history).not.toHaveBeenCalled();
+		},
+	);
 	it('uses restricted daily history requests and no logbook/model calls', async () => {
 		const transport = client();
 		await collectAmbientHistory({
@@ -242,5 +367,124 @@ describe('bounded history collection and practical default fallback', () => {
 			current: {thresholdLux: 50},
 			source: 'practical_starting_point_not_learned',
 		});
+	});
+});
+
+describe('room-specific light history coverage', () => {
+	it.each([
+		'other_room',
+		'other_room_missing_label',
+		'other_room_missing_device',
+		'other_room_device_area',
+		'other_room_parent_area',
+		'other_room_missing_state',
+		'other_room_denied',
+		'other_room_disabled',
+		'missing_metadata',
+		'unknown_area',
+		'no_area',
+		'missing_device',
+		'room_missing_label',
+		'room_denied',
+		'room_disabled',
+		'room_unapproved',
+	])('checks coverage conservatively for %s lights', async (condition) => {
+		const data = auditData();
+		if (data.registries.status !== 'available') {
+			throw new Error('fixture');
+		}
+
+		const otherId = 'light.example_second';
+		const isOutsideRoom = condition.startsWith('other_room');
+		data.registries.areas.push({
+			area_id: 'other_area',
+			name: 'Other Room',
+			aliases: [],
+			labels: [],
+		});
+		if (condition !== 'other_room_missing_state') {
+			data.states.push(historical(otherId, 'off'));
+		}
+
+		if (condition !== 'missing_metadata') {
+			data.registries.entities.push({
+				entity_id: otherId,
+				area_id: isOutsideRoom
+					? 'other_area'
+					: condition === 'unknown_area'
+						? 'missing_area'
+						: null,
+				device_id: ['no_area', 'unknown_area'].includes(condition) ? null : 'second_device',
+				labels: [
+					'other_room_missing_label',
+					'room_missing_label',
+					'other_room_device_area',
+					'other_room_parent_area',
+				].includes(condition)
+					? ['missing_label']
+					: [],
+				disabled_by: condition.endsWith('disabled') ? 'user' : null,
+			});
+		}
+
+		if (condition === 'other_room_device_area' || condition === 'other_room_parent_area') {
+			data.registries.entities.at(-1)!.area_id = null;
+		}
+
+		if (!condition.endsWith('missing_device')) {
+			data.registries.devices.push({
+				id: 'second_device',
+				area_id:
+					condition === 'other_room_parent_area'
+						? null
+						: condition === 'other_room_device_area'
+							? 'other_area'
+							: 'example_area',
+				parent_device_id: condition === 'other_room_parent_area' ? 'parent_device' : null,
+				labels: [],
+				disabled_by: null,
+			});
+		}
+
+		if (condition === 'other_room_parent_area') {
+			data.registries.devices.push({
+				id: 'parent_device',
+				area_id: 'other_area',
+				labels: [],
+				disabled_by: null,
+			});
+		}
+
+		if (condition.endsWith('denied')) {
+			data.policy!.deny.push({entityId: otherId});
+		} else if (condition === 'room_unapproved') {
+			data.policy!.allow = [{entityId: lightId}, {entityId: sensorId}];
+		}
+
+		const policy = structuredClone(data.policy);
+		const room = resolveThresholdRoom(data, 'Example Room');
+		expect(room.lightCoverageComplete).toBe(isOutsideRoom);
+		expect(room.lights.map((light) => light.entityId)).toEqual([lightId]);
+		const transport = client();
+		const result = await collectAmbientHistory({
+			room,
+			client: transport,
+			days: 2,
+			now: end,
+			thresholdLux: 40,
+		});
+		if (isOutsideRoom) {
+			expect(result.evidence.halfHourBins).toBe(16);
+			expect(transport.history).toHaveBeenCalledTimes(2);
+			for (const [request] of transport.history.mock.calls) {
+				expect(request.entityIds).toEqual([sensorId, lightId]);
+			}
+		} else {
+			expect(result.evidence.status).toBe('incomplete_sensor_or_light_coverage');
+			expect(transport.config).not.toHaveBeenCalled();
+			expect(transport.history).not.toHaveBeenCalled();
+		}
+
+		expect(data.policy).toEqual(policy);
 	});
 });

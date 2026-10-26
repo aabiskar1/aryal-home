@@ -47,9 +47,28 @@ export const resolveThresholdRoom = (data: AuditData, name: string) => {
 	);
 	const lights = permitted.filter((entity) => entity.domain === 'light');
 	const allLights = members.filter((entity) => entity.domain === 'light');
-	const hasUnresolvedLights = discovered.some(
-		(entity) => entity.domain === 'light' && entity.metadata.status !== 'available',
-	);
+	const entries = new Map(data.registries.entities.map((entry) => [entry.entity_id, entry]));
+	const devices = new Map(data.registries.devices.map((device) => [device.id, device]));
+	const knownAreas = new Set(data.registries.areas.map((entry) => entry.area_id));
+	const hasUnresolvedLights = discovered.some((entity) => {
+		if (entity.domain !== 'light') {
+			return false;
+		}
+
+		// Resolve only area precedence here: incomplete labels/device metadata elsewhere
+		// must not block this room when a known different area can be established.
+		// This never grants eligibility or adds history query targets.
+		const entry = entries.get(entity.entityId);
+		const device = devices.get(entry?.device_id ?? '');
+		const parent = devices.get(device?.parent_device_id ?? '');
+		const areaId = entry?.area_id ?? device?.area_id ?? parent?.area_id;
+		return (
+			areaId === undefined ||
+			areaId === null ||
+			!knownAreas.has(areaId) ||
+			(areaId === area.area_id && entity.metadata.status !== 'available')
+		);
+	});
 	const sensor = sensors.length === 1 ? sensors[0] : undefined;
 	return {
 		areaId: area.area_id,

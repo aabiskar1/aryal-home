@@ -8,7 +8,7 @@ import {
 	ASSESSMENT_REQUEST_MAX_BYTES,
 	ASSESSMENT_RESPONSE_MAX_BYTES,
 } from './reasoning.js';
-import {validateAssessment} from './validation.js';
+import {evaluateAssessmentEvidence, validateAssessment} from './validation.js';
 
 export const assessContext = async (input: {
 	selected: SelectedAssessment;
@@ -34,6 +34,18 @@ export const assessContext = async (input: {
 			validation: 'not_run' as const,
 			model: 'not_called' as const,
 			issues: ['context_over_budget'],
+			requestBytes,
+		};
+	}
+
+	const evidence = evaluateAssessmentEvidence(selected.context, input.now());
+	if (evidence.issues.length > 0) {
+		return {
+			...base,
+			validation: 'not_run' as const,
+			model: 'not_called' as const,
+			issues: evidence.issues,
+			presence: evidence.presence,
 			requestBytes,
 		};
 	}

@@ -58,13 +58,20 @@ Complete selection is limited to 16 lights and 16 observations. Larger selection
 closed without truncation. The full serialized Ollama request, including model name,
 prompt, schema and 4,096 bytes of output headroom, must fit the smaller of the existing
 PLANNING_REQUEST_MAX_BYTES setting and 24,576 bytes. Oversized requests skip the model;
-responses over 4,096 bytes are rejected before JSON parsing. There is one model call,
+responses over 4,096 bytes are rejected before JSON parsing. There is at most one model call,
 no application retry and the existing bounded local transport timeout.
 
 ## Reasoning and deterministic recommendation
 
-Ollama receives the fixed goal and structured context even when evidence is missing,
-so it can reason about uncertainty. It may return `suggest_action`, `no_action` or
+Before generation, shared deterministic evidence checks return trusted `insufficient_context`
+without calling Ollama when the approved threshold, usable current lux, permitted lights or
+consistent required evidence is missing. The validated context snapshot and issue codes remain
+available; `model: not_called` and `validation: not_run` indicate no model proposal was validated.
+Unknown presence and unavailable solar context remain optional; bright conditions, clear presence
+and already-on lights can still support a valid model `no_action` decision.
+
+For sufficient evidence, Ollama receives the fixed goal and structured context.
+It may return `suggest_action`, `no_action` or
 `insufficient_context` through a strict discriminated Zod/JSON Schema. Suggestions
 contain only known light references and `turn_on`; the other outcomes require empty
 actions. Rationale is bounded to 320 characters and presence classification is explicit.

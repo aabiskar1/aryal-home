@@ -62,12 +62,13 @@ describe('explicit advisory assessment CLI', () => {
 			context: {preference: {status: 'missing'}},
 			decision: {
 				outcome: 'insufficient_context',
-				model: 'structured_response',
-				validation: 'accepted',
+				model: 'not_called',
+				validation: 'not_run',
 				issues: ['missing_threshold'],
 				executionAuthority: 'none',
 			},
 		});
+		expect(deps.chat).not.toHaveBeenCalled();
 		expect(await readdir(directory)).toEqual([]);
 	});
 	it.each(['true', 'false'])(

@@ -143,10 +143,12 @@ describe('one-call structured context reasoning and deterministic recommendation
 		'reports missing preference independently of model %s',
 		async (outcome) => {
 			const choice = selected(undefined, {preferences: {version: 1, rooms: []}});
-			const {result} = await run(proposal(outcome), choice);
+			const {result, chat} = await run(proposal(outcome), choice);
 			expect(result.outcome).toBe('insufficient_context');
 			expect(result.issues).toContain('missing_threshold');
 			expect(result.recommendations).toEqual([]);
+			expect(result.model).toBe('not_called');
+			expect(chat).not.toHaveBeenCalled();
 		},
 	);
 	it.each(['missing', 'stale', 'invalid', 'wrong_unit'])(
@@ -169,32 +171,45 @@ describe('one-call structured context reasoning and deterministic recommendation
 			};
 			changes[condition]!();
 
-			const {result} = await run(proposal(), selected(data));
+			const {result, chat} = await run(proposal(), selected(data));
 			expect(result.outcome).toBe('insufficient_context');
 			expect(result.issues).toContain(
 				condition === 'missing' ? 'missing_illuminance' : 'unusable_illuminance',
 			);
 			expect(result.recommendations).toEqual([]);
+			expect(chat).not.toHaveBeenCalled();
 		},
 	);
 	it('reports both missing preference and stale required evidence without a substitute value', async () => {
 		const data = assessmentData();
 		data.states[1]!.last_changed = '2026-10-10T19:00:00Z';
-		const {result} = await run(proposal(), selected(data, {preferences: {version: 1, rooms: []}}));
+		const selection = selected(data, {preferences: {version: 1, rooms: []}});
+		const context = structuredClone(selection.context);
+		const {result, chat} = await run(proposal(), selection);
 		expect(result.issues).toEqual(
 			expect.arrayContaining(['missing_threshold', 'unusable_illuminance']),
 		);
+		expect(result).toMatchObject({
+			outcome: 'insufficient_context',
+			model: 'not_called',
+			validation: 'not_run',
+			recommendations: [],
+			executionAuthority: 'none',
+		});
+		expect(chat).not.toHaveBeenCalled();
+		expect(selection.context).toEqual(context);
 	});
 	it.each(['100', 'NaN'])(
 		'never discards a conflicting/unusable %s reading in favor of a good lux sensor',
 		async (value) => {
 			const data = assessmentData();
 			addEntity(data, {...lux(value), entity_id: 'sensor.example_second'});
-			const {result} = await run(proposal(), selected(data));
+			const {result, chat} = await run(proposal(), selected(data));
 			expect(result.issues).toContain(
 				value === 'NaN' ? 'unusable_illuminance' : 'conflicting_illuminance',
 			);
 			expect(result.recommendations).toEqual([]);
+			expect(chat).not.toHaveBeenCalled();
 		},
 	);
 	it('accepts multiple fresh lux sensors when their threshold comparisons agree', async () => {
@@ -236,11 +251,12 @@ describe('one-call structured context reasoning and deterministic recommendation
 				);
 			}
 
-			const {result} = await run(proposal('suggest_action', presence), selected(data));
+			const {result, chat} = await run(proposal('suggest_action', presence), selected(data));
 			expect(result.issues).toContain(
 				presence === 'clear' ? 'presence_clear' : 'conflicting_presence',
 			);
 			expect(result.recommendations).toEqual([]);
+			expect(chat).toHaveBeenCalledTimes(presence === 'clear' ? 1 : 0);
 		},
 	);
 	it('does not recommend redundant turn_on for an already-on light', async () => {
@@ -293,23 +309,86 @@ describe('one-call structured context reasoning and deterministic recommendation
 			};
 			changes[condition]!();
 
-			const {result} = await run(proposal(), selected(data));
-			expect(result.issues).toContain('unknown_target');
+			const {result, chat} = await run(proposal(), selected(data));
+			expect(result.issues).toContain('no_permitted_lights');
 			expect(result.recommendations).toEqual([]);
+			expect(chat).not.toHaveBeenCalled();
 		},
 	);
 	it('rechecks evidence freshness after the model returns', async () => {
-		const {result} = await run(proposal(), selected(), {now: () => now + 240_001});
+		const clock = vi
+			.fn<() => number>()
+			.mockReturnValueOnce(now)
+			.mockReturnValue(now + 240_001);
+		const {result, chat} = await run(proposal(), selected(), {now: clock});
 		expect(result.issues).toContain('unusable_illuminance');
 		expect(result.recommendations).toEqual([]);
+		expect(chat).toHaveBeenCalledTimes(1);
 	});
 	it.each([now + 300_001, now - 1, NaN])(
 		'rejects an expired/future/invalid snapshot at %s',
 		async (time) => {
-			const {result} = await run(proposal(), selected(), {now: () => time});
+			const {result, chat} = await run(proposal(), selected(), {now: () => time});
 			expect(result.issues).toContain('stale_snapshot');
+			expect(chat).not.toHaveBeenCalled();
 		},
 	);
+});
+
+describe('eligible assessment evidence still reaches Ollama', () => {
+	it.each([
+		'bright',
+		'threshold_equality',
+		'presence_clear',
+		'presence_missing',
+		'presence_stale',
+		'presence_invalid',
+		'clock_unavailable',
+		'already_on',
+		'freshness_boundary',
+	])('invokes Ollama exactly once for a valid no_action assessment with %s', async (condition) => {
+		const data = assessmentData();
+		const changes: Record<string, () => void> = {
+			bright() {
+				data.states[1]!.state = '100';
+			},
+			threshold_equality() {
+				data.states[1]!.state = '40';
+			},
+			presence_clear() {
+				data.states[2]!.state = 'off';
+			},
+			presence_missing() {
+				data.states.pop();
+			},
+			presence_stale() {
+				data.states[2]!.last_changed = '2026-10-10T19:00:00Z';
+			},
+			presence_invalid() {
+				data.states[2]!.state = 'maybe';
+			},
+			already_on() {
+				data.states[0]!.state = 'on';
+			},
+			freshness_boundary() {
+				data.states[1]!.last_changed = '2026-10-10T19:55:00Z';
+			},
+		};
+		changes[condition]?.();
+		const selection = selected(
+			data,
+			condition === 'clock_unavailable' ? {location: undefined} : {},
+		);
+		const {result, chat} = await run(proposal('no_action', selection.context.presence), selection);
+		expect(chat).toHaveBeenCalledTimes(1);
+		expect(result).toMatchObject({
+			outcome: 'no_action',
+			model: 'structured_response',
+			validation: 'accepted',
+			issues: [],
+			recommendations: [],
+		});
+	});
 });
 
 describe('strict model and resource boundaries', () => {

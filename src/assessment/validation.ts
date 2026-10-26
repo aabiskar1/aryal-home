@@ -100,6 +100,17 @@ const darknessEvidence = (context: AssessmentContext, now: number) => {
 	};
 };
 
+/** Shared goal evidence checks before generation and again at recommendation validation. */
+export const evaluateAssessmentEvidence = (context: AssessmentContext, now: number) => {
+	const {issues, isDark} = darknessEvidence(context, now);
+	const presence = presenceFrom(context.observations, now);
+	if (presence === 'conflicting') {
+		issues.push('conflicting_presence');
+	}
+
+	return {issues: [...new Set(issues)], isDark, presence};
+};
+
 /** Advisory snapshot validation only. No readiness/command types or execution imports. */
 export const validateAssessment = (
 	selected: SelectedAssessment,
@@ -107,11 +118,7 @@ export const validateAssessment = (
 	now: number,
 ): AssessmentDecision => {
 	const {context, targets} = selected;
-	const {issues, isDark} = darknessEvidence(context, now);
-	const presence = presenceFrom(context.observations, now);
-	if (presence === 'conflicting') {
-		issues.push('conflicting_presence');
-	}
+	const {issues, isDark, presence} = evaluateAssessmentEvidence(context, now);
 
 	if (proposal.presence !== presence) {
 		issues.push('presence_mismatch');

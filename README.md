@@ -11,9 +11,14 @@ _Your home. Your intelligence. Your control._
 ARYAL is a privacy-first, local AI orchestration framework that connects contextual intelligence
 with safe, deterministic smart home automation.
 
-It integrates with Home Assistant and locally hosted language models to interpret natural language,
-reason about contextual information, and propose actions within explicitly defined security
-boundaries.
+It gathers relevant context for small local language models to reason about situations and propose
+useful recommendations within deterministic safety boundaries. Natural-language requests are an
+optional interface. See the [project vision](docs/vision.md).
+
+Run an explicit [context-driven home assessment](docs/assessment.md), without an instruction:
+`npm run assess-home -- --area "Example Room"` after building. The first advisory goal is
+`lighting_comfort`, combining permitted light/lux/presence evidence, saved room thresholds and
+available local-time/daylight context. It grants no execution authority or automatic approval.
 
 An explicitly invoked [advisory lighting history analysis](docs/lighting-learning.md) inspects
 permitted room lights and illuminance evidence without controlling devices or activating

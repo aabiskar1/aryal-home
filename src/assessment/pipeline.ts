@@ -1,0 +1,75 @@
+import {Buffer} from 'node:buffer';
+import type {OllamaChatTransport} from '../ollama/client.js';
+import type {SelectedAssessment} from './context.js';
+import {assessmentProposalSchema} from './schemas.js';
+import {
+	createAssessmentRequest,
+	assessmentRequestBytes,
+	ASSESSMENT_REQUEST_MAX_BYTES,
+	ASSESSMENT_RESPONSE_MAX_BYTES,
+} from './reasoning.js';
+import {validateAssessment} from './validation.js';
+
+export const assessContext = async (input: {
+	selected: SelectedAssessment;
+	chat: OllamaChatTransport;
+	model: string;
+	now: () => number;
+	maxRequestBytes?: number;
+}) => {
+	const {selected} = input;
+	const base = {
+		outcome: 'insufficient_context' as const,
+		recommendations: [],
+		executionAuthority: 'none' as const,
+	};
+	const request = createAssessmentRequest(selected.context);
+	const requestBytes = assessmentRequestBytes(request, input.model);
+	if (
+		requestBytes >
+		Math.min(input.maxRequestBytes ?? ASSESSMENT_REQUEST_MAX_BYTES, ASSESSMENT_REQUEST_MAX_BYTES)
+	) {
+		return {
+			...base,
+			validation: 'not_run' as const,
+			model: 'not_called' as const,
+			issues: ['context_over_budget'],
+			requestBytes,
+		};
+	}
+
+	let content: string;
+	try {
+		content = await input.chat(request);
+	} catch {
+		return {
+			...base,
+			validation: 'not_run' as const,
+			model: 'unavailable' as const,
+			issues: ['model_unavailable'],
+			requestBytes,
+		};
+	}
+
+	try {
+		if (Buffer.byteLength(content) > ASSESSMENT_RESPONSE_MAX_BYTES) {
+			throw new Error('Assessment response exceeds budget.');
+		}
+
+		const proposal = assessmentProposalSchema.parse(JSON.parse(content));
+		return {
+			...validateAssessment(selected, proposal, input.now()),
+			model: 'structured_response' as const,
+			modelOutcome: proposal.outcome,
+			requestBytes,
+		};
+	} catch {
+		return {
+			...base,
+			validation: 'rejected' as const,
+			model: 'invalid_output' as const,
+			issues: ['invalid_model_output'],
+			requestBytes,
+		};
+	}
+};

@@ -21,6 +21,11 @@ preferences: `npm run learn-lighting -- --area "Example Room" --days 10` after b
 It reports insufficient evidence when direct user interaction cannot be established; current
 REST account attribution alone cannot produce a threshold suggestion.
 
+For an adjustable practical starting point, use the separate
+[room darkness threshold CLI](docs/lighting-thresholds.md):
+`npm run lighting-threshold -- --area "Example Room" --suggest`. Saving or resetting a
+local preference requires explicit confirmation and has no effect on planning or execution.
+
 Home Assistant remains the source of truth. The model receives only explicitly permitted,
 normalized state and produces structured entity or set intents. Application code expands validated
 area/domain scopes into every permitted matching entity, then checks deterministic entity policy

@@ -1,5 +1,11 @@
 # Planning context and execution authority
 
+The standalone [room darkness threshold utility](lighting-thresholds.md) offers an adjustable
+practical heuristic, read-only ambient checks and confirmed local preference storage. Its
+deterministic evaluator and separate gitignored preferences are not imported by planning,
+readiness or execution. Saving a preference neither grants exposure/control nor changes the
+illuminance refusal. No model or Home Assistant mutation path is used by this utility.
+
 The separate [advisory lighting learner](lighting-learning.md) reuses read-only discovery,
 registry metadata and policy resolution, then collects bounded entity-filtered REST history
 and logbook data. Event identification, historical solar/local-time enrichment, statistical

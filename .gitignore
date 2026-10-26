@@ -19,5 +19,10 @@ config/entity-policy.json.audit-fix-*.tmp
 config/allowed-entities.json
 config/denied-entities.json
 
+# Local per-room darkness preferences
+config/lighting-thresholds.json
+config/lighting-thresholds.json.lock
+config/lighting-thresholds.json.*.tmp
+
 # Local Codex workspace
 .codex/

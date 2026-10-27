@@ -8,6 +8,12 @@ recommendations. It may read saved darkness preferences; it cannot approve actio
 dispatch commands, modify preferences or call execution. The instruction-driven planning
 and execution boundaries below remain unchanged, including the illuminance refusal.
 
+The [environmental assessment goal](environment-assessment.md) uses the same bounded single-call
+pipeline with separate schemas, source composition and deterministic claim validation. It combines
+exact-area indoor observations with one explicitly permitted installation-level current weather
+source. Unknown comfort preferences remain distinct from lighting thresholds; review output grants
+no command, approval or execution authority. Exact registry area matching is shared by both goals.
+
 The standalone [room darkness threshold utility](lighting-thresholds.md) offers an adjustable
 practical heuristic, read-only ambient checks and confirmed local preference storage. Its
 deterministic evaluator and separate gitignored preferences are not imported by planning,

@@ -1,4 +1,5 @@
 import type {AuditData} from '../audit/collection.js';
+import {resolveRegistryArea} from '../home-assistant/area.js';
 import {discoverEntities} from '../home-assistant/discovery.js';
 import {normalizeState} from '../home-assistant/state-normalizer.js';
 import {observationRegistry} from '../observations/registry.js';
@@ -9,17 +10,7 @@ export const resolveThresholdRoom = (data: AuditData, name: string) => {
 		throw new Error('Room registries unavailable.');
 	}
 
-	const query = name.normalize('NFKC').trim().toLowerCase();
-	const areas = data.registries.areas.filter((area) =>
-		[area.name, ...area.aliases].some(
-			(candidate) => candidate.normalize('NFKC').trim().toLowerCase() === query,
-		),
-	);
-	if (areas.length !== 1) {
-		throw new Error('Room name missing or ambiguous.');
-	}
-
-	const area = areas[0]!;
+	const area = resolveRegistryArea(data.registries, name);
 	const stateIds = new Set(data.states.map((state) => state.entity_id));
 	// Registry-only lights must count against coverage, never become history query targets.
 	const missingLights = data.registries.entities

@@ -22,6 +22,13 @@ Home Assistant
 
 The LLM is a planner and reasoning component. It is never an authority or execution engine.
 
+Use [docs/vision.md](docs/vision.md) when proposing or implementing features. ARYAL's core
+direction is context gathering → local AI reasoning → useful recommendations → controlled,
+independently authorized execution. Natural-language commands are an optional interface.
+For each feature, check whether it improves context, reasoning, recommendations, integration
+or controlled execution; is reusable beyond one room/device; preserves local-first privacy,
+small-model efficiency and deterministic safety; and avoids unnecessary complexity.
+
 ## Deployment constraints
 
 The project runs in a small Proxmox home lab:
@@ -132,6 +139,14 @@ Implemented:
   post-model validation/readiness, and sanitized expansion diagnostics
 - Separate read-only occupancy/presence and temperature/humidity planning evidence, with existing
   allow/deny exposure policy, deterministic area relevance, and complete request byte accounting
+- Separate explicitly invoked context-driven assessment with a fixed advisory lighting_comfort goal,
+  compact permitted room evidence, read-only approved thresholds, one local model call and independent
+  deterministic recommendation validation
+
+Keep assessment separate from instruction-driven planning, readiness and execution. Missing saved
+thresholds must never become the 40 lx advisory default. Missing/stale presence remains unknown;
+time/daylight never substitutes for lux. Assessment recommendations grant no approval or dispatch
+authority and must not be wired into executeReadyCommands(). See docs/assessment.md.
 
 Keep actionable `states` and read-only `observations` distinct. Only light/switch states enter action
 context IDs, semantic set scopes, and readiness. Observations expose no supported actions or service

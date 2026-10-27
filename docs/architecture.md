@@ -1,5 +1,13 @@
 # Planning context and execution authority
 
+The [project vision](vision.md) centres on context-driven local reasoning and useful
+recommendations, with natural-language input as an optional interface. The separate
+[explicit assessment pipeline](assessment.md) selects a compact typed room snapshot, invokes
+Ollama once with an application-defined advisory goal, and independently validates its
+recommendations. It may read saved darkness preferences; it cannot approve actions, create
+dispatch commands, modify preferences or call execution. The instruction-driven planning
+and execution boundaries below remain unchanged, including the illuminance refusal.
+
 The standalone [room darkness threshold utility](lighting-thresholds.md) offers an adjustable
 practical heuristic, read-only ambient checks and confirmed local preference storage. Its
 deterministic evaluator and separate gitignored preferences are not imported by planning,
@@ -103,7 +111,7 @@ requires an empty actions array and the existing `Proposed plan:` summary contra
 
 `validateObservationConditions()` is an application-owned post-schema validation gate in the
 planning pipeline, before entity/set intent expansion, policy validation, and readiness. No
-deterministic illuminance comparison mechanism exists. Whenever the selected context combines
+deterministic illuminance comparator is registered in instruction-driven planning. Whenever its selected context combines
 actionable states with illuminance evidence, this gate replaces the parsed model plan with
 `insufficient_context` and empty actions, regardless of model confidence or current light states.
 It preserves the complete mixed context and exposes a trusted `conditionIssue` diagnostic with

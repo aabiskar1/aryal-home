@@ -5,6 +5,7 @@ import {createHistoryClient} from '../home-assistant/history-client.js';
 import type {LearningLocation} from '../home-assistant/history-schemas.js';
 import {readThresholdPreferences} from '../lighting-thresholds/preferences.js';
 import {selectAssessmentContext} from '../assessment/context.js';
+import {selectEnvironmentContext} from '../assessment/environment-context.js';
 import {assessContext} from '../assessment/pipeline.js';
 import type {OllamaChatTransport} from '../ollama/client.js';
 
@@ -40,7 +41,7 @@ const dependencies: AssessmentDependencies = {
 	},
 };
 const help =
-	'Usage: npm run assess-home -- --area "Example Room"\nExplicit read-only lighting_comfort assessment. No instructions, device control, approvals or preference changes.';
+	'Usage: npm run assess-home -- --area "Example Room" [--goal lighting_comfort|environment_comfort]\nExplicit read-only assessment; default lighting_comfort. No instructions, device control, approvals or preference changes.';
 
 export const runAssessmentCli = async (
 	args: readonly string[],
@@ -50,15 +51,34 @@ export const runAssessmentCli = async (
 		return {exitCode: 0, output: help};
 	}
 
-	const area = z.string().trim().min(1).max(120).safeParse(args[1]);
-	if (args.length !== 2 || args[0] !== '--area' || !area.success || area.data.startsWith('--')) {
+	if (args.length !== 2 && args.length !== 4) {
+		return {exitCode: 2, output: help};
+	}
+
+	const flags = new Map<string, string>();
+
+	for (let index = 0; index < args.length; index += 2) {
+		const flag = args[index]!;
+		const value = args[index + 1]!;
+		if (!['--area', '--goal'].includes(flag) || flags.has(flag) || value.startsWith('--')) {
+			return {exitCode: 2, output: help};
+		}
+
+		flags.set(flag, value);
+	}
+
+	const area = z.string().trim().min(1).max(120).safeParse(flags.get('--area'));
+	const goal = z
+		.enum(['lighting_comfort', 'environment_comfort'])
+		.safeParse(flags.get('--goal') ?? 'lighting_comfort');
+	if (!area.success || !goal.success) {
 		return {exitCode: 2, output: help};
 	}
 
 	try {
 		const data = await deps.collect();
 		const capturedAt = deps.now();
-		const preferences = await deps.read();
+		const preferences = goal.data === 'lighting_comfort' ? await deps.read() : undefined;
 		let location: LearningLocation | undefined;
 		try {
 			location = await deps.location();
@@ -66,13 +86,16 @@ export const runAssessmentCli = async (
 			// Local time/daylight are optional context, never replacements for required lux.
 		}
 
-		const selected = selectAssessmentContext({
-			data,
-			area: area.data,
-			preferences: preferences.preferences,
-			location,
-			now: capturedAt,
-		});
+		const selected =
+			goal.data === 'environment_comfort'
+				? selectEnvironmentContext({data, area: area.data, location, now: capturedAt})
+				: selectAssessmentContext({
+						data,
+						area: area.data,
+						preferences: preferences!.preferences,
+						location,
+						now: capturedAt,
+					});
 		const result = await assessContext({
 			selected,
 			chat: deps.chat,

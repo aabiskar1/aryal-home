@@ -9,9 +9,16 @@ import {
 	ASSESSMENT_RESPONSE_MAX_BYTES,
 } from './reasoning.js';
 import {evaluateAssessmentEvidence, validateAssessment} from './validation.js';
+import type {SelectedEnvironmentAssessment} from './environment-context.js';
+import {createEnvironmentRequest} from './environment-reasoning.js';
+import {environmentProposalSchema} from './environment-schemas.js';
+import {
+	evaluateEnvironmentEvidence,
+	validateEnvironmentAssessment,
+} from './environment-validation.js';
 
 export const assessContext = async (input: {
-	selected: SelectedAssessment;
+	selected: SelectedAssessment | SelectedEnvironmentAssessment;
 	chat: OllamaChatTransport;
 	model: string;
 	now: () => number;
@@ -23,7 +30,11 @@ export const assessContext = async (input: {
 		recommendations: [],
 		executionAuthority: 'none' as const,
 	};
-	const request = createAssessmentRequest(selected.context);
+	const {context} = selected;
+	const request =
+		context.goal === 'environment_comfort'
+			? createEnvironmentRequest(context)
+			: createAssessmentRequest(context);
 	const requestBytes = assessmentRequestBytes(request, input.model);
 	if (
 		requestBytes >
@@ -38,7 +49,10 @@ export const assessContext = async (input: {
 		};
 	}
 
-	const evidence = evaluateAssessmentEvidence(selected.context, input.now());
+	const evidence =
+		context.goal === 'environment_comfort'
+			? evaluateEnvironmentEvidence(context, input.now())
+			: evaluateAssessmentEvidence(context, input.now());
 	if (evidence.issues.length > 0) {
 		return {
 			...base,
@@ -47,6 +61,7 @@ export const assessContext = async (input: {
 			issues: evidence.issues,
 			presence: evidence.presence,
 			requestBytes,
+			...('limitations' in evidence && {limitations: evidence.limitations}),
 		};
 	}
 
@@ -68,9 +83,19 @@ export const assessContext = async (input: {
 			throw new Error('Assessment response exceeds budget.');
 		}
 
+		if (context.goal === 'environment_comfort') {
+			const proposal = environmentProposalSchema.parse(JSON.parse(content));
+			return {
+				...validateEnvironmentAssessment(context, proposal, input.now()),
+				model: 'structured_response' as const,
+				modelOutcome: proposal.outcome,
+				requestBytes,
+			};
+		}
+
 		const proposal = assessmentProposalSchema.parse(JSON.parse(content));
 		return {
-			...validateAssessment(selected, proposal, input.now()),
+			...validateAssessment({context, targets: selected.targets}, proposal, input.now()),
 			model: 'structured_response' as const,
 			modelOutcome: proposal.outcome,
 			requestBytes,

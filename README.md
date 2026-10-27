@@ -20,6 +20,11 @@ Run an explicit [context-driven home assessment](docs/assessment.md), without an
 `lighting_comfort`, combining permitted light/lux/presence evidence, saved room thresholds and
 available local-time/daylight context. It grants no execution authority or automatic approval.
 
+For [environmental intelligence](docs/environment-assessment.md), use
+`npm run assess-home -- --area "Example Room" --goal environment_comfort`. It combines permitted
+indoor temperature/humidity with one explicitly permitted current Home Assistant weather source.
+Structured insights and conditional review suggestions are independently checked and remain read-only.
+
 An explicitly invoked [advisory lighting history analysis](docs/lighting-learning.md) inspects
 permitted room lights and illuminance evidence without controlling devices or activating
 preferences: `npm run learn-lighting -- --area "Example Room" --days 10` after building.

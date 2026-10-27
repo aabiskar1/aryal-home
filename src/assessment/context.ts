@@ -87,10 +87,17 @@ const observationFor = (
 };
 
 export const presenceFrom = (
-	observations: AssessmentObservation[],
+	observations: Array<
+		Pick<AssessmentObservation, 'value' | 'measuredAt' | 'updatedAt'> & {
+			deviceClass: string;
+			status: string;
+		}
+	>,
 	now: number,
 ): AssessmentContext['presence'] => {
-	const presence = observations.filter((item) => item.deviceClass !== 'illuminance');
+	const presence = observations.filter(
+		(item) => item.deviceClass === 'presence' || item.deviceClass === 'occupancy',
+	);
 	const fresh = presence.filter(
 		(item) =>
 			item.status === 'available' &&
@@ -108,7 +115,7 @@ export const presenceFrom = (
 	return values.has('on') ? 'detected' : 'clear';
 };
 
-const clockFor = (
+export const clockFor = (
 	now: number,
 	location: LearningLocation | undefined,
 ): AssessmentContext['clock'] => {

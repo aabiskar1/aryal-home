@@ -1,10 +1,16 @@
 # Explicit context-driven assessment
 
 After building, run `npm run assess-home -- --area "Example Room"`. This read-only
-workflow has an application-defined `lighting_comfort` goal and accepts no natural-language
+workflow defaults to the application-defined `lighting_comfort` goal and accepts no natural-language
 instruction. It demonstrates the [context-driven vision](vision.md) independently of
 instruction-driven planning. It does not schedule work, modify preferences, approve
 actions, construct service commands or invoke execution. DRY_RUN does not change that.
+
+The second goal, [environment_comfort](environment-assessment.md), combines permitted indoor
+temperature/humidity with separately scoped current Home Assistant weather and local time:
+`npm run assess-home -- --area "Example Room" --goal environment_comfort`. It returns validated
+informational insights or conditional requests to review missing context, never device actions.
+The lighting-specific context and validation described below retain their existing behaviour.
 
 The implementation separates context selection (`src/assessment/context.ts`), strict
 schemas, one-call Ollama reasoning, deterministic validation and pipeline coordination.

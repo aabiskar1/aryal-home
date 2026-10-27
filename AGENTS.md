@@ -139,14 +139,21 @@ Implemented:
   post-model validation/readiness, and sanitized expansion diagnostics
 - Separate read-only occupancy/presence and temperature/humidity planning evidence, with existing
   allow/deny exposure policy, deterministic area relevance, and complete request byte accounting
-- Separate explicitly invoked context-driven assessment with a fixed advisory lighting_comfort goal,
+- Separate explicitly invoked context-driven assessment with an advisory lighting_comfort goal,
   compact permitted room evidence, read-only approved thresholds, one local model call and independent
   deterministic recommendation validation
+- Separate environment_comfort assessment with permitted indoor temperature/humidity, installation-level
+  current Home Assistant weather, local time and independently verified informational comparisons
 
 Keep assessment separate from instruction-driven planning, readiness and execution. Missing saved
 thresholds must never become the 40 lx advisory default. Missing/stale presence remains unknown;
 time/daylight never substitutes for lux. Assessment recommendations grant no approval or dispatch
 authority and must not be wired into executeReadyCommands(). See docs/assessment.md.
+
+Environmental assessment must keep weather separate from room observations, require explicit weather
+exposure permission, reject ambiguous sources, retain unknown comfort preferences and validate every
+structured claim/reference. Comparison tolerances are labelled heuristics, never comfort limits.
+Review suggestions carry no device actions or approval. See docs/environment-assessment.md.
 
 Keep actionable `states` and read-only `observations` distinct. Only light/switch states enter action
 context IDs, semantic set scopes, and readiness. Observations expose no supported actions or service

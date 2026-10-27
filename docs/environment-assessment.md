@@ -53,18 +53,52 @@ exact `°C`, `°F` or `K`, converts to Celsius and retains the original unit. Hu
 are invalid. Weather attributes must be actual finite numbers, not numeric strings.
 Canonical temperatures round to six decimal places for stable cross-unit comparisons.
 
-Indoor readings retain PR #17's conservative five-minute `last_changed` freshness; attribute
-updates do not refresh a measurement. Weather uses a five-minute `last_updated` snapshot age,
-after validating timestamp syntax, ordering and future times: a weather condition can stay
-unchanged while its current temperature/humidity attributes update. This proves only recent
-Home Assistant state updates, not the provider's physical measurement time, which is explicitly
-`provider_measurement_time_unknown`. A provider updating less frequently may remain insufficient.
+Home Assistant distinguishes [state changes, updates and reports](https://www.home-assistant.io/docs/configuration/state_object/):
+`last_changed` records a value change, `last_updated` a state or attribute update, and optional
+`last_reported` records state reporting activity even when values remain unchanged. ARYAL retains
+these timestamps, validates timezone-qualified syntax, requires change ≤ update ≤ report when
+provided, and rejects future timestamps. An absent `last_reported` remains absent. None of these
+timestamps establishes when a device physically measured its environment. Collection time,
+online status and battery level cannot establish measurement freshness either.
+
+Indoor numeric observations distinguish value availability from reporting recency:
+
+- `recently_reported`: a valid value/unit and recent Home Assistant activity. Use `last_reported`
+  when supplied; otherwise explicitly label the `last_updated` fallback. The default maximum
+  activity age is 900 seconds (15 minutes).
+- `last_known_unverified`: a valid value remains visible, but activity is too old to support a
+  current advisory comparison. It is uncertain last-known context, never verified current data.
+- `unavailable_or_invalid`: unavailable, restored, malformed or invalid values/units/timestamps
+  have null values and cannot support comparisons.
+
+All indoor observations explicitly retain `physical_measurement_time_unknown`, including recent
+reports. These are activity-based advisory comparisons of reported values, never a guarantee of
+current physical conditions. An unchanged value can be recently reported even after days without
+a change; a recent report can also contain a cached value.
+
+Weather independently uses `last_updated`, with a default maximum age of 1800 seconds (30 minutes).
+A condition can remain unchanged while attributes update. A recent unchanged `last_reported`
+does not refresh old weather attributes. Weather retains `provider_measurement_time_unknown`;
+Home Assistant activity does not prove a new provider measurement.
+
+The two defaults are application policy for low-risk, explicitly invoked advice: a shorter indoor
+activity window and a separate, longer weather update allowance. They are not verified device or
+provider reporting intervals, physical validity guarantees, or claims about any integration's
+firmware. Configure them locally with `ENVIRONMENT_INDOOR_REPORT_MAX_AGE_SECONDS` and
+`ENVIRONMENT_WEATHER_UPDATE_MAX_AGE_SECONDS` (integer seconds, 1–86400). Invalid configuration
+fails closed for environmental assessment. The effective policy is included in the compact
+snapshot. Increasing a window never establishes physical measurement freshness. Presence and
+lighting retain their existing five-minute rules; the assessment snapshot itself also retains
+its five-minute age limit.
 
 Each source carries provenance, scope, availability, timestamps and its freshness basis.
-Missing, unavailable, invalid and stale observations are not numbers. Different canonical values
-among selected indoor sensors of the same numeric class make that profile conflicting; there
+Missing, unavailable and invalid observations are not numbers. Last-known numeric values remain
+labelled and cannot support current claims or evidence references. Different canonical values
+among usable selected indoor sensors of the same numeric class make that profile conflicting; there
 is no averaging or arbitrary subset selection. A different usable profile can still support an
-insight, but a claim cannot cite a conflicting or otherwise unusable profile. Missing/stale
+insight: temperature-only and humidity-only evidence are supported, while a claim cannot cite a
+conflicting, last-known or otherwise unusable profile. No profile is silently reduced to a favorable
+subset when one of its selected sensors is unusable. Missing/stale
 presence stays unknown; presence conflicts stay explicit. Neither determines physical temperature
 or humidity, and neither proves the user's intent.
 
@@ -77,7 +111,8 @@ does not read or interpret the lighting preference file as a comfort preference.
 ## Reasoning and independent checks
 
 Preflight skips Ollama when the snapshot is unusable, weather condition is not current/unambiguous,
-or neither indoor temperature nor humidity has usable evidence. An outdoor numeric attribute is
+or neither indoor temperature nor humidity has recently reported usable evidence. Both last-known
+profiles preserve values and diagnostics but skip inference. An outdoor numeric attribute is
 required only for a claim comparing that quantity. Valid indoor evidence plus current weather can
 still justify asking for comfort preferences even when optional outdoor attributes are missing.
 Unknown preferences and missing presence do not block informational comparisons.
@@ -103,7 +138,8 @@ temperatures cannot support a cooling ventilation review. All review output expl
 additional context such as comfort preferences, intent, window safety and outdoor air quality.
 It recommends reviewing options, never opening a window or controlling heating/fans.
 
-Accepted output uses application-owned explanations and verified structured facts, not model
+Accepted output uses application-owned explanations and checked relationships between reported
+values, explicitly stating that physical measurement ages remain unknown, rather than model
 prose. Every outcome has `executionAuthority: none` and no executable recommendations. Unknown
 preferences do not prevent an insight, but interpreting conditions as comfortable/uncomfortable
 requires a later explicit preference design. No preference storage or automatic approval is added.
@@ -113,3 +149,8 @@ The existing 16-observation complete-selection cap, 24,576-byte maximum full req
 Requests never silently trim evidence. No model retries or extra inference calls are introduced.
 Output remains private household data: sanitize it before sharing. Existing lighting comparisons,
 readiness, authorization, dispatch, DRY_RUN and the instruction-driven illuminance guard are unchanged.
+
+A future integration may supply independently documented measurement timestamps or reporting
+guarantees. Such evidence would need its own validated provenance and semantics; it must not
+silently reinterpret Home Assistant activity timestamps as physical measurements. No provider
+specific reporting assumptions or confidence scores are introduced here.

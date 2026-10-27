@@ -4,7 +4,12 @@ import {normalizeState} from '../home-assistant/state-normalizer.js';
 import type {LearningLocation} from '../home-assistant/history-schemas.js';
 import {resolveEntityPolicy} from '../policy/resolver.js';
 import {resolveRegistryArea} from '../home-assistant/area.js';
-import {clockFor, evidenceStatus, presenceFrom} from './context.js';
+import {clockFor} from './context.js';
+import {
+	environmentReportingPolicySchema,
+	weatherUpdateFreshness,
+	type EnvironmentReportingPolicy,
+} from './environment-freshness.js';
 import {
 	environmentContextSchema,
 	weatherConditionSchema,
@@ -15,6 +20,7 @@ import {
 	environmentTimestamps,
 	environmentalValue,
 	indoorEnvironmentFor,
+	environmentPresenceFrom,
 } from './environment-values.js';
 
 export type SelectedEnvironmentAssessment = {
@@ -30,7 +36,7 @@ const emptyWeather = (status: OutdoorWeather['status']): OutdoorWeather => ({
 	condition: null,
 	freshnessBasis: 'last_updated_snapshot',
 	measurementTime: 'provider_measurement_time_unknown',
-	measuredAt: null,
+	lastChangedAt: null,
 	updatedAt: null,
 	temperature: {
 		ref: 'outdoor_temperature',
@@ -48,14 +54,18 @@ const emptyWeather = (status: OutdoorWeather['status']): OutdoorWeather => ({
 	},
 });
 
-const weatherFor = (entities: DiscoveredEntity[], now: number): OutdoorWeather => {
+const weatherFor = (
+	entities: DiscoveredEntity[],
+	now: number,
+	policy: EnvironmentReportingPolicy,
+): OutdoorWeather => {
 	if (entities.length !== 1) {
 		return emptyWeather(entities.length === 0 ? 'missing_or_not_permitted' : 'multiple_sources');
 	}
 
 	const entity = entities[0]!;
 	const state = entity.homeAssistantState;
-	const timestamps = environmentTimestamps(entity);
+	const {timestamps, valid: areTimestampsValid} = environmentTimestamps(entity, now);
 	const condition = weatherConditionSchema.safeParse(state.state);
 	if (state.state === 'unknown' || state.state === 'unavailable') {
 		return {...emptyWeather('unavailable'), ...timestamps};
@@ -66,10 +76,7 @@ const weatherFor = (entities: DiscoveredEntity[], now: number): OutdoorWeather =
 	}
 
 	// A condition can stay unchanged while current attributes update. Validate ordering first.
-	const status =
-		evidenceStatus(timestamps.measuredAt, timestamps.updatedAt, now) === 'invalid'
-			? 'invalid'
-			: evidenceStatus(timestamps.updatedAt, timestamps.updatedAt, now);
+	const status = areTimestampsValid ? weatherUpdateFreshness(timestamps, policy, now) : 'invalid';
 	if (status !== 'available') {
 		return {...emptyWeather(status), ...timestamps};
 	}
@@ -107,12 +114,14 @@ export const selectEnvironmentContext = (input: {
 	area: string;
 	location: LearningLocation | undefined;
 	now: number;
+	reportingPolicy?: EnvironmentReportingPolicy | undefined;
 }): SelectedEnvironmentAssessment => {
 	const {data, now} = input;
 	if (new Set(data.states.map((state) => state.entity_id)).size !== data.states.length) {
 		throw new Error('Duplicate state identity.');
 	}
 
+	const reportingPolicy = environmentReportingPolicySchema.parse(input.reportingPolicy ?? {});
 	const room = resolveRegistryArea(data.registries, input.area);
 	const discovered = discoverEntities(data.states, data.registries);
 	const candidates = discovered.filter((entity) => {
@@ -145,7 +154,9 @@ export const selectEnvironmentContext = (input: {
 		throw new Error('Complete environmental selection exceeds item limits.');
 	}
 
-	const observations = indoor.map((entity, index) => indoorEnvironmentFor(entity, index, now));
+	const observations = indoor.map((entity, index) =>
+		indoorEnvironmentFor(entity, index, now, reportingPolicy),
+	);
 	const context = environmentContextSchema.parse({
 		version: 1,
 		goal: 'environment_comfort',
@@ -156,10 +167,12 @@ export const selectEnvironmentContext = (input: {
 		outdoorWeather: weatherFor(
 			permitted.filter((entity) => entity.domain === 'weather'),
 			now,
+			reportingPolicy,
 		),
 		preference: {status: 'unknown', source: 'environment_preferences_not_configured'},
 		clock: clockFor(now, input.location),
-		presence: presenceFrom(observations, now),
+		presence: environmentPresenceFrom(observations, now),
+		reportingPolicy,
 		comparisonPolicy: {
 			source: 'advisory_comparison_tolerance_not_comfort_preference',
 			temperatureDeltaC: 0.5,

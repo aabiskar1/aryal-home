@@ -26,8 +26,8 @@ beforeEach(() => {
 			entity_id: 'light.example_lamp',
 			state: 'on',
 			attributes: {friendly_name: 'Example Lamp'},
-			last_changed: '',
-			last_updated: '',
+			last_changed: '2026-09-01T00:00:00Z',
+			last_updated: '2026-09-01T00:00:00Z',
 		},
 	]);
 	vi.mocked(readFile).mockResolvedValue(

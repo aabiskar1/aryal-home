@@ -1,5 +1,7 @@
 import {MAX_MEASUREMENT_AGE_MS} from '../lighting-thresholds/evaluation.js';
-import {evidenceStatus, presenceFrom} from './context.js';
+import {evidenceStatus} from './context.js';
+import {environmentPresenceFrom} from './environment-values.js';
+import {indoorReportingFreshness, weatherUpdateFreshness} from './environment-freshness.js';
 import type {EnvironmentContext, EnvironmentProposal} from './environment-schemas.js';
 
 const indoorProfile = (
@@ -13,14 +15,22 @@ const indoorProfile = (
 		return {status: 'missing' as const, value: undefined, refs};
 	}
 
-	if (
-		items.some(
-			(item) =>
-				item.status !== 'available' ||
-				evidenceStatus(item.measuredAt, item.updatedAt, now) !== 'available',
-		)
-	) {
+	const recency = new Set(
+		items.map((item) =>
+			item.status === 'available'
+				? indoorReportingFreshness(item, context.reportingPolicy, now)
+				: 'unavailable_or_invalid',
+		),
+	);
+	if (recency.has('unavailable_or_invalid')) {
 		return {status: 'unusable' as const, value: undefined, refs};
+	}
+
+	if (
+		recency.has('last_known_unverified') ||
+		items.some((item) => item.freshness !== 'recently_reported')
+	) {
+		return {status: 'last_known_unverified' as const, value: undefined, refs};
 	}
 
 	const values = new Set(items.map((item) => item.value));
@@ -40,12 +50,12 @@ export const evaluateEnvironmentEvidence = (context: EnvironmentContext, now: nu
 	}
 
 	const weather = context.outdoorWeather;
-	const isWeatherFresh =
-		weather.status === 'available' &&
-		evidenceStatus(weather.measuredAt, weather.updatedAt, now) !== 'invalid' &&
-		evidenceStatus(weather.updatedAt, weather.updatedAt, now) === 'available';
+	const weatherRecency = weatherUpdateFreshness(weather, context.reportingPolicy, now);
+	const isWeatherFresh = weather.status === 'available' && weatherRecency === 'available';
 	if (!isWeatherFresh) {
-		issues.push(weather.status === 'available' ? 'weather_stale' : `weather_${weather.status}`);
+		issues.push(
+			weather.status === 'available' ? `weather_${weatherRecency}` : `weather_${weather.status}`,
+		);
 	}
 
 	const temperature = indoorProfile(context, 'temperature', now);
@@ -70,7 +80,7 @@ export const evaluateEnvironmentEvidence = (context: EnvironmentContext, now: nu
 		temperature,
 		humidity,
 		isWeatherFresh,
-		presence: presenceFrom(context.observations, now),
+		presence: environmentPresenceFrom(context.observations, now),
 	};
 };
 
@@ -137,7 +147,7 @@ const availableReferences = (
 		if (
 			(item.deviceClass === 'occupancy' || item.deviceClass === 'presence') &&
 			item.status === 'available' &&
-			evidenceStatus(item.measuredAt, item.updatedAt, now) === 'available'
+			evidenceStatus(item.lastChangedAt, item.updatedAt, now) === 'available'
 		) {
 			allowed.add(item.ref);
 		}
@@ -254,28 +264,32 @@ const checkInsight = (
 
 const summaryFor = (proposal: InsightProposal) => {
 	const temperatureWords = {
-		indoor_warmer: 'Indoors is warmer than outdoors',
-		indoor_cooler: 'Indoors is cooler than outdoors',
-		similar: 'Indoor and outdoor temperatures are similar',
+		indoor_warmer:
+			'The recently reported indoor temperature is higher than the reported outdoor temperature',
+		indoor_cooler:
+			'The recently reported indoor temperature is lower than the reported outdoor temperature',
+		similar: 'Recently reported indoor and outdoor temperature values are similar',
 		not_compared: 'Temperature was not compared',
 	};
 	const humidityWords = {
-		indoor_higher: 'Indoor relative humidity is higher than outdoor relative humidity',
-		indoor_lower: 'Indoor relative humidity is lower than outdoor relative humidity',
-		similar: 'Indoor and outdoor relative humidity are similar',
+		indoor_higher:
+			'The recently reported indoor relative humidity value is higher than the reported outdoor value',
+		indoor_lower:
+			'The recently reported indoor relative humidity value is lower than the reported outdoor value',
+		similar: 'Recently reported indoor and outdoor relative humidity values are similar',
 		not_compared: 'Relative humidity was not compared',
 	};
 	const summaries = {
 		temperature_comparison: `${temperatureWords[proposal.temperatureRelation]}. The similar band is an advisory comparison tolerance, not a comfort preference.`,
 		humidity_comparison: `${humidityWords[proposal.humidityRelation]}. Relative humidity alone does not prove whether ventilation would reduce moisture.`,
 		weather_caution:
-			'Indoors is warmer than outdoors, but reported weather warrants checking outdoor and window safety before considering ventilation.',
+			'Reported indoor temperature is higher than reported outdoors, but weather reports warrant checking outdoor and window safety before considering ventilation.',
 		ventilation_review:
-			'Indoors is warmer than outdoors. Review whether outdoor air could help cooling; window safety, outdoor air quality, comfort preferences and user intent are not established.',
+			'Reported indoor temperature is higher than reported outdoors. Review whether outdoor air could help cooling; actual measurement ages, window safety, outdoor air quality, preferences and intent are not established.',
 		comfort_preferences_review:
-			'Current indoor observations and weather are available, but comfort preferences are unknown. Review preferences before judging conditions as comfortable or uncomfortable.',
+			'Recently reported indoor values and weather are available, but comfort preferences are unknown. Review preferences before judging conditions as comfortable or uncomfortable.',
 	};
-	return `${summaries[proposal.category]} Current reported weather: ${proposal.weatherCondition}. Presence: ${proposal.presence}; presence does not establish user intent.`;
+	return `Recent Home Assistant activity supports this advisory assessment; physical measurement ages remain unknown. ${summaries[proposal.category]} Reported weather: ${proposal.weatherCondition}. Presence: ${proposal.presence}; presence does not establish user intent.`;
 };
 
 export const validateEnvironmentAssessment = (
@@ -301,6 +315,7 @@ export const validateEnvironmentAssessment = (
 		limitations: evidence.limitations,
 		presence: evidence.presence,
 		executionAuthority: 'none' as const,
+		evidenceSemantics: 'recent_home_assistant_activity_not_verified_physical_measurements' as const,
 		recommendations: [],
 		insights:
 			!isInsight || issues.length > 0

@@ -301,6 +301,7 @@ describe('multi-source environmental reasoning and independent facts', () => {
 				},
 				stale() {
 					stateFor(data, temperatureId).last_changed = '2026-10-10T19:00:00Z';
+					stateFor(data, temperatureId).last_updated = '2026-10-10T19:00:00Z';
 				},
 				unavailable() {
 					stateFor(data, temperatureId).state = 'unavailable';
@@ -411,6 +412,7 @@ describe('environment preflight, output and resource boundaries', () => {
 			indoor_stale() {
 				for (const id of [temperatureId, humidityId]) {
 					stateFor(data, id).last_changed = '2026-10-10T19:00:00Z';
+					stateFor(data, id).last_updated = '2026-10-10T19:00:00Z';
 				}
 			},
 			indoor_invalid() {
@@ -453,11 +455,15 @@ describe('environment preflight, output and resource boundaries', () => {
 		expect(choice.context).toEqual(snapshot);
 	});
 	it('rechecks current evidence after generation without retrying the model', async () => {
+		const data = environmentData();
+		const weather = stateFor(data, weatherId);
+		weather.last_changed = new Date(now - 1_799_999).toISOString();
+		weather.last_updated = weather.last_changed;
 		const clock = vi
 			.fn<() => number>()
 			.mockReturnValueOnce(now)
-			.mockReturnValue(now + 240_001);
-		const {result, chat} = await run(undefined, selectedEnvironment(), {now: clock});
+			.mockReturnValue(now + 2);
+		const {result, chat} = await run(undefined, selectedEnvironment(data), {now: clock});
 		expect(chat).toHaveBeenCalledTimes(1);
 		expect(result.issues).toContain('weather_stale');
 		expect(result).toMatchObject({validation: 'rejected', insights: []});

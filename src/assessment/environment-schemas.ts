@@ -1,6 +1,10 @@
 import {z} from 'zod';
 import {historyTimestampSchema} from '../home-assistant/history-schemas.js';
 import {clockSchema, presenceSchema} from './schemas.js';
+import {
+	environmentReportingPolicySchema,
+	environmentalFreshnessSchema,
+} from './environment-freshness.js';
 
 // Current conditions only: https://www.home-assistant.io/integrations/weather/#condition-mapping
 export const weatherConditionSchema = z.enum([
@@ -28,8 +32,9 @@ export const environmentStatusSchema = z.enum([
 	'stale',
 ]);
 const timestamps = {
-	measuredAt: historyTimestampSchema.nullable(),
+	lastChangedAt: historyTimestampSchema.nullable(),
 	updatedAt: historyTimestampSchema.nullable(),
+	lastReportedAt: historyTimestampSchema.optional(),
 };
 const valueSchema = z.union([z.number(), z.enum(['on', 'off']), z.null()]);
 const unitSchema = z.enum(['°C', '%']).nullable();
@@ -43,15 +48,26 @@ const rawIndoorSchema = z.strictObject({
 	value: valueSchema,
 	unit: unitSchema,
 	originalUnit: originalUnitSchema,
-	freshnessBasis: z.literal('last_changed'),
+	freshnessBasis: z.enum(['last_changed', 'last_updated', 'last_reported']),
+	freshness: environmentalFreshnessSchema.nullable(),
+	measurementTime: z.literal('physical_measurement_time_unknown'),
 	...timestamps,
 });
-export const indoorEnvironmentSchema = rawIndoorSchema.refine((item) => {
+const classifiedIndoorSchema = rawIndoorSchema.refine((item) => {
+	if (item.status !== 'available') {
+		return item.freshness === null || item.freshness === 'unavailable_or_invalid';
+	}
+
+	return ['temperature', 'humidity'].includes(item.deviceClass)
+		? ['recently_reported', 'last_known_unverified'].includes(item.freshness ?? '')
+		: item.freshness === null;
+});
+export const indoorEnvironmentSchema = classifiedIndoorSchema.refine((item) => {
 	if (item.status !== 'available') {
 		return item.value === null;
 	}
 
-	if (item.measuredAt === null || item.updatedAt === null) {
+	if (item.lastChangedAt === null || item.updatedAt === null) {
 		return false;
 	}
 
@@ -75,6 +91,7 @@ export const indoorEnvironmentSchema = rawIndoorSchema.refine((item) => {
 	}
 
 	return (
+		item.freshnessBasis === 'last_changed' &&
 		(item.value === 'on' || item.value === 'off') &&
 		item.unit === null &&
 		item.originalUnit === null
@@ -126,7 +143,7 @@ export const outdoorWeatherSchema = rawWeatherSchema.refine(
 		item.temperature.ref === 'outdoor_temperature' &&
 		item.humidity.ref === 'outdoor_humidity' &&
 		(item.status === 'available'
-			? item.condition !== null && item.measuredAt !== null && item.updatedAt !== null
+			? item.condition !== null && item.lastChangedAt !== null && item.updatedAt !== null
 			: item.condition === null && item.temperature.value === null && item.humidity.value === null),
 );
 const rawEnvironmentContextSchema = z.strictObject({
@@ -143,6 +160,7 @@ const rawEnvironmentContextSchema = z.strictObject({
 	}),
 	clock: clockSchema,
 	presence: presenceSchema,
+	reportingPolicy: environmentReportingPolicySchema,
 	comparisonPolicy: z.strictObject({
 		source: z.literal('advisory_comparison_tolerance_not_comfort_preference'),
 		temperatureDeltaC: z.literal(0.5),

@@ -129,6 +129,7 @@ describe('explicit environmental goal CLI and unchanged lighting default', () =>
 		const data = environmentData();
 		for (const id of [temperatureId, humidityId]) {
 			stateFor(data, id).last_changed = '2026-10-10T19:00:00Z';
+			stateFor(data, id).last_updated = '2026-10-10T19:00:00Z';
 		}
 
 		vi.mocked(deps.collect).mockResolvedValue(data);

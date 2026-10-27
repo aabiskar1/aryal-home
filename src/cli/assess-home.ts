@@ -6,6 +6,10 @@ import type {LearningLocation} from '../home-assistant/history-schemas.js';
 import {readThresholdPreferences} from '../lighting-thresholds/preferences.js';
 import {selectAssessmentContext} from '../assessment/context.js';
 import {selectEnvironmentContext} from '../assessment/environment-context.js';
+import {
+	environmentReportingPolicyFromEnv,
+	type EnvironmentReportingPolicy,
+} from '../assessment/environment-freshness.js';
 import {assessContext} from '../assessment/pipeline.js';
 import type {OllamaChatTransport} from '../ollama/client.js';
 
@@ -16,11 +20,13 @@ export type AssessmentDependencies = {
 	chat: OllamaChatTransport;
 	config: () => {model: string; maxRequestBytes: number};
 	now: () => number;
+	reportingPolicy?: () => EnvironmentReportingPolicy;
 };
 const dependencies: AssessmentDependencies = {
 	collect: collectAuditData,
 	read: readThresholdPreferences,
 	now: () => Date.now(),
+	reportingPolicy: environmentReportingPolicyFromEnv,
 	async location() {
 		const env = z.object({HA_URL: z.url(), HA_TOKEN: z.string().min(1)}).parse(process.env);
 		return createHistoryClient(env.HA_URL, env.HA_TOKEN).config();
@@ -88,7 +94,13 @@ export const runAssessmentCli = async (
 
 		const selected =
 			goal.data === 'environment_comfort'
-				? selectEnvironmentContext({data, area: area.data, location, now: capturedAt})
+				? selectEnvironmentContext({
+						data,
+						area: area.data,
+						location,
+						now: capturedAt,
+						...(deps.reportingPolicy && {reportingPolicy: deps.reportingPolicy()}),
+					})
 				: selectAssessmentContext({
 						data,
 						area: area.data,

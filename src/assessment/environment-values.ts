@@ -2,17 +2,31 @@ import type {DiscoveredEntity} from '../home-assistant/discovery.js';
 import {normalizeState} from '../home-assistant/state-normalizer.js';
 import {historyTimestampSchema} from '../home-assistant/history-schemas.js';
 import {toObservationState} from '../planning/observations.js';
-import {evidenceStatus} from './context.js';
+import {areStateTimestampsValid} from '../home-assistant/state-timestamps.js';
+import {evidenceStatus, presenceFrom} from './context.js';
+import {
+	indoorReportingFreshness,
+	type EnvironmentReportingPolicy,
+} from './environment-freshness.js';
 import type {IndoorEnvironmentObservation, WeatherValue} from './environment-schemas.js';
 
-export const environmentTimestamps = (entity: DiscoveredEntity) => {
+export const environmentTimestamps = (entity: DiscoveredEntity, now: number) => {
 	const changed = historyTimestampSchema.safeParse(entity.homeAssistantState.last_changed);
 	const updated = historyTimestampSchema.safeParse(entity.homeAssistantState.last_updated);
+	const reported = historyTimestampSchema.safeParse(entity.homeAssistantState.last_reported);
 	return {
-		measuredAt: changed.success ? changed.data : null,
-		updatedAt: updated.success ? updated.data : null,
+		timestamps: {
+			lastChangedAt: changed.success ? changed.data : null,
+			updatedAt: updated.success ? updated.data : null,
+			...(reported.success && {lastReportedAt: reported.data}),
+		},
+		valid: areStateTimestampsValid(entity.homeAssistantState, now),
 	};
 };
+
+const numericFreshnessBasis = (
+	timestamps: ReturnType<typeof environmentTimestamps>['timestamps'],
+) => (timestamps.lastReportedAt === undefined ? 'last_updated' : 'last_reported');
 
 /** Canonical units, not comfort limits. Weather attributes must be numeric, never coerced strings. */
 export const environmentalValue = (
@@ -65,10 +79,11 @@ export const indoorEnvironmentFor = (
 	entity: DiscoveredEntity,
 	index: number,
 	now: number,
+	policy: EnvironmentReportingPolicy,
 ): IndoorEnvironmentObservation => {
 	const normalized = normalizeState(entity);
 	const projected = toObservationState(normalized);
-	const timestamps = environmentTimestamps(entity);
+	const {timestamps, valid: areTimestampsValid} = environmentTimestamps(entity, now);
 	const deviceClass = normalized.deviceClass as IndoorEnvironmentObservation['deviceClass'];
 	const isNumeric = deviceClass === 'temperature' || deviceClass === 'humidity';
 	const numeric = environmentalValue(
@@ -83,11 +98,14 @@ export const indoorEnvironmentFor = (
 	) {
 		status = 'unavailable';
 	} else if (
+		areTimestampsValid &&
 		projected !== undefined &&
 		entity.homeAssistantState.attributes.restored !== true &&
 		(!isNumeric || numeric.status === 'available')
 	) {
-		status = evidenceStatus(timestamps.measuredAt, timestamps.updatedAt, now);
+		status = isNumeric
+			? 'available'
+			: evidenceStatus(timestamps.lastChangedAt, timestamps.updatedAt, now);
 	}
 
 	return {
@@ -104,7 +122,23 @@ export const indoorEnvironmentFor = (
 				: null,
 		unit: isNumeric ? numeric.unit : null,
 		originalUnit: isNumeric ? numeric.originalUnit : null,
-		freshnessBasis: 'last_changed',
+		freshnessBasis: isNumeric ? numericFreshnessBasis(timestamps) : 'last_changed',
+		freshness: isNumeric
+			? status === 'available'
+				? indoorReportingFreshness(timestamps, policy, now)
+				: 'unavailable_or_invalid'
+			: null,
+		measurementTime: 'physical_measurement_time_unknown',
 		...timestamps,
 	};
 };
+
+/** Presence retains its existing change-age rule; numeric reports cannot imply occupancy. */
+export const environmentPresenceFrom = (
+	observations: IndoorEnvironmentObservation[],
+	now: number,
+) =>
+	presenceFrom(
+		observations.map((item) => ({...item, measuredAt: item.lastChangedAt})),
+		now,
+	);

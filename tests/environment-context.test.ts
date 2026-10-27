@@ -221,7 +221,7 @@ describe('separate indoor, installation weather, clock and preference compositio
 			freshnessBasis: 'last_updated_snapshot',
 			measurementTime: 'provider_measurement_time_unknown',
 		});
-		stateFor(data, weatherId).last_updated = '2026-10-10T19:54:59Z';
+		stateFor(data, weatherId).last_updated = '2026-10-10T19:29:59Z';
 		expect(selectedEnvironment(data).context.outdoorWeather.status).toBe('stale');
 	});
 	it.each(['bad', '2026-10-10T20:00:01Z', '2026-10-10T20:00:00'])(
@@ -321,7 +321,7 @@ describe('separate indoor, installation weather, clock and preference compositio
 			).toBe(false);
 		},
 	);
-	it('does not refresh indoor temperature from attribute-only updates', () => {
+	it('labels recent indoor attribute activity without claiming a physical measurement', () => {
 		const data = environmentData();
 		const state = stateFor(data, temperatureId);
 		state.last_changed = '2026-10-10T19:00:00Z';
@@ -330,7 +330,13 @@ describe('separate indoor, installation weather, clock and preference compositio
 			selectedEnvironment(data).context.observations.find(
 				(item) => item.deviceClass === 'temperature',
 			),
-		).toMatchObject({status: 'stale', value: null});
+		).toMatchObject({
+			status: 'available',
+			value: 23,
+			freshness: 'recently_reported',
+			freshnessBasis: 'last_updated',
+			measurementTime: 'physical_measurement_time_unknown',
+		});
 	});
 	it.each(['rainy', 'sunny', 'unavailable'])(
 		'never silently chooses among multiple permitted weather sources, including %s',

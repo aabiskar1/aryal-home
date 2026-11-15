@@ -1,33 +1,52 @@
 # Repository Instructions
 
-## Project purpose
+## Project purpose and canonical direction
 
-This project is a local-first AI orchestration layer for Home Assistant. A local LLM provides contextual reasoning and planning, while deterministic application code retains authority over which actions are permitted and executed.
+ARYAL is a privacy-first, local **personal home intelligence** system for Home Assistant users.
+Its first product milestone is **whole-home situational intelligence**, not a natural-language
+remote control. It connects relevant permitted facts across environmental comfort (A),
+lighting/room activity (C), and whole-home daily overview (D) to generate useful,
+independently validated insights and proactive recommendations. Later milestones add
+confirmation-led learning, explicitly approved low-risk actions, and broader personal
+context (calendar, transport, energy). Natural-language commands are an optional interface.
 
-The intended flow is:
+**Before planning or implementing a feature, read** [docs/vision.md](docs/vision.md) and
+[docs/roadmap.md](docs/roadmap.md). Consult the proposed/accepted technical decisions in
+[docs/adr/README.md](docs/adr/README.md), plus relevant existing architecture documents.
+The vision is product authority, the roadmap describes phased delivery, and ADR candidates
+are not yet implementation approvals.
+
+The intended product flow is:
 
 ```text
-Home Assistant
-  -> entity discovery
-  -> selector-based allow/deny policy resolution
-  -> resolved allowed entities
-  -> state normalization
-  -> deterministic safety/rules
-  -> local Ollama LLM
-  -> structured proposed actions
-  -> schema validation
-  -> deterministic policy validation
-  -> Home Assistant execution
+Permitted information sources
+  -> validated, provenance-aware, relevant compact context
+  -> deterministic candidate situation screening
+  -> bounded local Ollama reasoning
+  -> structured insight, recommendation, no-action or insufficient-context
+  -> independent deterministic evidence and safety validation
+  -> insight relevance, deduplication and category-based delivery rules
+  -> Home Assistant dashboard and explicitly selected notification devices
+  -> [later, separately approved] fresh authorization and controlled execution
 ```
 
-The LLM is a planner and reasoning component. It is never an authority or execution engine.
+First Home Intelligence milestone: **insights and proactive recommendations only**.
+Do not connect advisory assessment outputs to existing execution paths. Do not introduce
+autonomous actions, learned-preference writes or broad notification broadcasts.
+Home Assistant is the only planned UI; do not create a standalone ARYAL dashboard.
+Notification destinations must be explicitly selected for each category, default to none,
+and never be chosen by the model. Support existing local Ollama installations first;
+managed model installation is deferred. Use deterministic screening to avoid an LLM call
+on each state update and preserve small-model efficiency.
 
-Use [docs/vision.md](docs/vision.md) when proposing or implementing features. ARYAL's core
-direction is context gathering → local AI reasoning → useful recommendations → controlled,
-independently authorized execution. Natural-language commands are an optional interface.
-For each feature, check whether it improves context, reasoning, recommendations, integration
-or controlled execution; is reusable beyond one room/device; preserves local-first privacy,
-small-model efficiency and deterministic safety; and avoids unnecessary complexity.
+The existing explicit light/switch command execution API remains a separate supported
+capability under its existing safety rules; it is **not** a precedent for autonomous actions.
+The LLM can reason and propose, but cannot authorise, approve or dispatch.
+
+For each feature, check whether it improves cross-source understanding, user usefulness,
+Home Assistant integration, trustworthy evidence, local performance or future controlled
+autonomy; is reusable beyond one household; preserves privacy and deterministic safety;
+and is needed for the current milestone rather than speculative infrastructure.
 
 ## Deployment constraints
 

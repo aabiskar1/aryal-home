@@ -57,7 +57,7 @@ const availableClockSchema = z.strictObject({
 	daylight: z.enum(['daylight', 'civil_twilight', 'night', 'boundary_uncertain']),
 	reliability: z.literal('approximate_configured_location'),
 });
-const clockSchema = z.discriminatedUnion('status', [
+export const clockSchema = z.discriminatedUnion('status', [
 	z.strictObject({
 		status: z.literal('unavailable'),
 		source: z.literal('ha_config_and_system_clock'),

@@ -29,6 +29,16 @@ afterEach(async () => {
 });
 
 describe('explicit advisory assessment CLI', () => {
+	it('does not apply environmental reporting configuration to lighting assessment', async () => {
+		await writeFile(path, JSON.stringify(preferences));
+		deps.reportingPolicy = vi.fn(() => {
+			throw new Error('Invalid environmental configuration');
+		});
+		const result = await runAssessmentCli(args, deps);
+		expect(result.exitCode).toBe(0);
+		expect(deps.reportingPolicy).not.toHaveBeenCalled();
+		expect(deps.chat).toHaveBeenCalledTimes(1);
+	});
 	it('provides help without collecting data, reading preferences or invoking a model', async () => {
 		const result = await runAssessmentCli(['--help'], deps);
 		expect(result.exitCode).toBe(0);
